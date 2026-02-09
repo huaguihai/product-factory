@@ -10,19 +10,28 @@ import { scrapeGitHubTrending } from './sources/github-trending';
 import { scrapeHackerNews } from './sources/hackernews';
 import { scrapeProductHunt } from './sources/producthunt';
 import { scrapeReddit } from './sources/reddit';
+import { scrapeGoogleTrends } from './sources/google-trends';
+import { scrapeTechMedia } from './sources/tech-media-rss';
+import { scrapeTwitterTrends } from './sources/twitter-trends';
 
-type SourceName = 'github_trending' | 'hackernews' | 'producthunt' | 'reddit';
+type SourceName = 'github_trending' | 'hackernews' | 'producthunt' | 'reddit' | 'google_trends' | 'tech_media' | 'twitter_trends';
 
 const SOURCE_SCRAPERS: Record<SourceName, () => Promise<{ scraped: number; saved: number }>> = {
   github_trending: scrapeGitHubTrending,
   hackernews: scrapeHackerNews,
   producthunt: scrapeProductHunt,
   reddit: scrapeReddit,
+  google_trends: scrapeGoogleTrends,
+  tech_media: scrapeTechMedia,
+  twitter_trends: scrapeTwitterTrends,
 };
 
-// Rotate sources: each run picks 2 sources to avoid hitting all APIs at once
-let sourceIndex = 0;
-const SOURCE_ORDER: SourceName[] = ['github_trending', 'hackernews', 'producthunt', 'reddit'];
+// Rotate sources: each run picks 2 sources
+// google_trends, tech_media, and twitter_trends run every cycle (consumer-facing, high priority)
+// developer sources rotate among themselves
+let devSourceIndex = 0;
+const DEV_SOURCES: SourceName[] = ['github_trending', 'hackernews', 'producthunt', 'reddit'];
+const ALWAYS_SOURCES: SourceName[] = ['google_trends', 'tech_media', 'twitter_trends'];
 
 interface PreFilterResult {
   is_emerging: boolean;
@@ -36,13 +45,28 @@ interface PreFilterResult {
  * AI pre-filter: determine if a signal represents an emerging tech opportunity
  */
 async function preFilterSignal(signal: { title: string; description: string; source: string; stars: number }): Promise<PreFilterResult | null> {
-  const prompt = `Analyze this tech signal and determine if it represents an EMERGING technology opportunity.
+  const prompt = `Analyze this signal and determine if it represents an EMERGING product opportunity worth building a website around (tutorial, tool, or resource site for AdSense monetization).
 
 "Emerging" means:
-1. The project/product is NEW (< 30 days old ideally)
-2. Growing fast (gaining traction)
-3. NOT a mature/established tool (not image compression, not background removal, not generic tools)
-4. Has clear user demand or solves a real problem
+1. The product/technology/trend is NEW or recently went viral (< 30 days)
+2. Growing fast — gaining search interest, social buzz, or media coverage
+3. NOT a mature/established category (not image compression, not background removal, not generic well-known tools)
+4. Has a LARGE potential audience — ordinary people (not just developers) searching for how to use it, alternatives, tutorials, etc.
+
+HIGH priority signals:
+- New AI tools/apps that ordinary people want to try (e.g. new video generators, image editors, chatbots)
+- Trending consumer products or services covered by major tech media
+- Google Trends spikes for new product names or categories
+- "How to use X" type demand for recently launched products
+
+MEDIUM priority signals:
+- Developer tools with crossover appeal (e.g. no-code platforms, AI coding tools)
+- New open-source projects with large community interest (300+ stars, 100+ comments)
+
+LOW priority (likely dismiss):
+- Niche developer libraries or frameworks with < 1000 potential users
+- Academic papers or research without consumer application
+- Enterprise/B2B tools with no individual user market
 
 Signal:
 - Title: ${signal.title}
@@ -54,12 +78,13 @@ Respond in JSON:
 {
   "is_emerging": boolean,
   "novelty_reason": "why this is or isn't emerging",
-  "category": "ai_tool|dev_tool|saas|framework|protocol|other",
-  "potential_products": ["tutorial site", "config generator", etc.],
+  "category": "ai_tool|consumer_app|dev_tool|saas|framework|trending_topic|other",
+  "target_audience": "general_public|prosumer|developer|niche",
+  "potential_products": ["tutorial site", "how-to guide", "comparison page", "tool directory", etc.],
   "urgency": "high|medium|low"
 }
 
-Be strict. Quality > quantity. If unsure, set is_emerging to false.`;
+Prioritize signals with LARGE audiences. A trending AI video tool used by millions beats a niche Rust library used by hundreds.`;
 
   return await aiGenerateJson<PreFilterResult>(prompt, {
     agentType: 'scout',
@@ -153,12 +178,12 @@ export async function runScout(): Promise<{
     return { sources_scraped: [], total_scraped: 0, total_saved: 0, filtered: 0, kept: 0 };
   }
 
-  // Pick 2 sources for this run (rotate)
+  // Always scrape consumer-facing sources + rotate 1 dev source
   const sourcesToScrape: SourceName[] = [
-    SOURCE_ORDER[sourceIndex % SOURCE_ORDER.length],
-    SOURCE_ORDER[(sourceIndex + 1) % SOURCE_ORDER.length],
+    ...ALWAYS_SOURCES,
+    DEV_SOURCES[devSourceIndex % DEV_SOURCES.length],
   ];
-  sourceIndex = (sourceIndex + 2) % SOURCE_ORDER.length;
+  devSourceIndex = (devSourceIndex + 1) % DEV_SOURCES.length;
 
   let totalScraped = 0;
   let totalSaved = 0;

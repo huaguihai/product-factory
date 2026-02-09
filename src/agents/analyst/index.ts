@@ -85,7 +85,8 @@ Respond with JSON:
 {
   "title": "SEO-friendly opportunity title (English)",
   "slug": "url-safe-slug",
-  "description": "2-3 sentence description",
+  "description": "2-3 sentence description (English)",
+  "description_zh": "2-3句中文描述：这个项目是什么、为什么现在是机会、我们可以做什么",
   "target_keyword": "primary SEO keyword",
   "category": "ai_tool|dev_tool|saas|framework|tutorial|utility",
   "score_breakdown": {
@@ -99,7 +100,7 @@ Respond with JSON:
   "window_days_remaining": number,
   "competitors": [{"name": "...", "url": "...", "weakness": "..."}],
   "recommended_template": "tutorial-site|tool-site|comparison-site|cheatsheet-site|playground-site|resource-site",
-  "recommended_features": ["feature1", "feature2"],
+  "recommended_features_zh": ["功能建议1（中文）", "功能建议2（中文）"],
   "estimated_effort": "2h|4h|1d|2d|3d|1w",
   "reasoning": "Detailed reasoning for scores"
 }`;
@@ -125,19 +126,49 @@ export async function runAnalyst(): Promise<{ evaluated: number; opportunities: 
   }
 
   // Get analyzed signals that haven't been evaluated yet
-  const { data: signals } = await supabaseAdmin
+  const { data: rawSignals } = await supabaseAdmin
     .from('signals')
     .select('*')
     .eq('status', 'analyzed')
     .order('created_at', { ascending: false })
-    .limit(10);
+    .limit(20);
 
-  if (!signals || signals.length === 0) {
+  if (!rawSignals || rawSignals.length === 0) {
     console.log('[Analyst] No analyzed signals to evaluate');
     return { evaluated: 0, opportunities: 0 };
   }
 
-  console.log(`[Analyst] Evaluating ${signals.length} signals...`);
+  // Deduplicate signals by source_url — keep the one with highest traction
+  const urlMap = new Map<string, any>();
+  for (const sig of rawSignals) {
+    // Normalize URL: strip trailing slashes, query params for comparison
+    const rawUrl = sig.source_url || '';
+    const normalizedUrl = rawUrl.split('?')[0].replace(/\/+$/, '').toLowerCase();
+    const key = normalizedUrl || sig.title.toLowerCase().slice(0, 60);
+
+    const existing = urlMap.get(key);
+    if (!existing || (sig.stars || 0) > (existing.stars || 0)) {
+      if (existing) {
+        // Mark the duplicate as evaluated so it's not re-processed
+        await supabaseAdmin.from('signals').update({
+          status: 'dismissed',
+          raw_data: { ...existing.raw_data, dismiss_reason: 'Duplicate signal (merged)' },
+        }).eq('id', existing.id);
+        console.log(`[Analyst] ⊟ Merged duplicate signal: "${existing.title.slice(0, 50)}"`);
+      }
+      urlMap.set(key, sig);
+    } else {
+      // This signal is a duplicate with lower traction, dismiss it
+      await supabaseAdmin.from('signals').update({
+        status: 'dismissed',
+        raw_data: { ...sig.raw_data, dismiss_reason: 'Duplicate signal (merged)' },
+      }).eq('id', sig.id);
+      console.log(`[Analyst] ⊟ Merged duplicate signal: "${sig.title.slice(0, 50)}"`);
+    }
+  }
+
+  const signals = Array.from(urlMap.values()).slice(0, 10);
+  console.log(`[Analyst] Evaluating ${signals.length} signals (${rawSignals.length - signals.length} duplicates merged)...`);
 
   let evaluated = 0;
   let opportunities = 0;
@@ -163,13 +194,46 @@ export async function runAnalyst(): Promise<{ evaluated: number; opportunities: 
     // Check if opportunity with this slug already exists
     const { data: existingOpp } = await supabaseAdmin
       .from('opportunities')
-      .select('id')
+      .select('id, slug, target_keyword')
       .eq('slug', slug)
       .maybeSingle();
 
     if (existingOpp) {
-      console.log(`[Analyst] Opportunity already exists: ${slug}`);
+      console.log(`[Analyst] Opportunity already exists (slug): ${slug}`);
       continue;
+    }
+
+    // Check if opportunity with similar keyword already exists (prevent near-duplicates)
+    const keyword = assessment.target_keyword?.toLowerCase().trim() || '';
+    if (keyword) {
+      const { data: keywordMatch } = await supabaseAdmin
+        .from('opportunities')
+        .select('id, slug, target_keyword')
+        .ilike('target_keyword', `%${keyword}%`)
+        .limit(1)
+        .maybeSingle();
+
+      if (keywordMatch) {
+        console.log(`[Analyst] ⊟ Similar opportunity exists: "${keywordMatch.target_keyword}" ≈ "${keyword}", skipping`);
+        continue;
+      }
+
+      // Also check reverse: existing keyword contained in new keyword
+      const { data: reverseMatch } = await supabaseAdmin
+        .from('opportunities')
+        .select('id, slug, target_keyword')
+        .not('target_keyword', 'is', null)
+        .limit(50);
+
+      const hasSimilar = (reverseMatch || []).some((opp: any) => {
+        const existingKw = (opp.target_keyword || '').toLowerCase().trim();
+        return existingKw && (keyword.includes(existingKw) || existingKw.includes(keyword));
+      });
+
+      if (hasSimilar) {
+        console.log(`[Analyst] ⊟ Similar keyword already covered: "${keyword}", skipping`);
+        continue;
+      }
     }
 
     // Determine window status
@@ -186,6 +250,7 @@ export async function runAnalyst(): Promise<{ evaluated: number; opportunities: 
       title: assessment.title,
       slug,
       description: assessment.description,
+      description_zh: (assessment as any).description_zh || null,
       category: assessment.category,
       target_keyword: assessment.target_keyword,
       score,
@@ -197,6 +262,7 @@ export async function runAnalyst(): Promise<{ evaluated: number; opportunities: 
       search_volume: null,
       recommended_template: assessment.recommended_template,
       recommended_features: assessment.recommended_features,
+      recommended_features_zh: (assessment as any).recommended_features_zh || null,
       estimated_effort: assessment.estimated_effort,
       status: score >= 80 ? 'evaluated' : score >= 50 ? 'evaluated' : 'rejected',
       decision_reason: score < 50 ? `Score too low: ${score.toFixed(1)}` : null,

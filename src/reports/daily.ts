@@ -35,14 +35,32 @@ async function gatherReportData(): Promise<DailyReportData> {
     bySource[s.source] = (bySource[s.source] || 0) + 1;
   }
 
-  // Today's opportunities
+  // Today's opportunities with full details
   const { data: opportunities } = await supabaseAdmin
     .from('opportunities')
-    .select('title, slug, score, score_breakdown, target_keyword, recommended_template, window_status, status')
+    .select('title, slug, score, score_breakdown, target_keyword, recommended_template, recommended_features, recommended_features_zh, window_status, window_closes_at, competitors, description, description_zh, category, signal_ids, estimated_effort, status')
     .gte('created_at', startOfDay)
     .lte('created_at', endOfDay)
     .order('score', { ascending: false })
     .limit(5);
+
+  // Fetch related signals for source URLs and traction data
+  if (opportunities && opportunities.length > 0) {
+    const allSignalIds = opportunities.flatMap((o: any) => o.signal_ids || []);
+    if (allSignalIds.length > 0) {
+      const { data: relatedSignals } = await supabaseAdmin
+        .from('signals')
+        .select('id, source, source_url, stars, comments_count, title')
+        .in('id', allSignalIds);
+
+      // Attach signal data to opportunities
+      const signalMap = new Map((relatedSignals || []).map((s: any) => [s.id, s]));
+      for (const opp of opportunities) {
+        const ids = (opp as any).signal_ids || [];
+        (opp as any)._signals = ids.map((id: string) => signalMap.get(id)).filter(Boolean);
+      }
+    }
+  }
 
   // Cost summary
   const cost = await getTodayCostSummary();
@@ -55,89 +73,192 @@ async function gatherReportData(): Promise<DailyReportData> {
   };
 }
 
+const WINDOW_STATUS_MAP: Record<string, string> = {
+  'open': '开放中',
+  'closing': '即将关闭',
+  'upcoming': '即将开放',
+  'closed': '已关闭',
+};
+
+const TEMPLATE_MAP: Record<string, string> = {
+  'tutorial-site': '教程站',
+  'tool-site': '工具站',
+  'comparison-site': '对比站',
+  'cheatsheet-site': '速查表',
+  'playground-site': '在线体验',
+  'resource-site': '资源站',
+};
+
+const CATEGORY_MAP: Record<string, string> = {
+  'ai_tool': 'AI 工具',
+  'dev_tool': '开发工具',
+  'saas': 'SaaS',
+  'framework': '框架',
+  'tutorial': '教程',
+  'utility': '实用工具',
+};
+
 /**
- * Format report as Markdown
+ * Format a single opportunity as a detailed card
  */
-function formatReport(data: DailyReportData): string {
+function formatOpportunityCard(opp: any, index: number): string[] {
   const lines: string[] = [];
+  const score = typeof opp.score === 'number' ? opp.score.toFixed(1) : '?';
+  const breakdown = opp.score_breakdown || {};
 
-  lines.push(`# Daily Report — ${data.date}`);
+  // Header
+  lines.push(`### ${index}. ${opp.title}`);
+  lines.push(`**综合评分: ${score}** | ${CATEGORY_MAP[opp.category] || opp.category} | ${TEMPLATE_MAP[opp.recommended_template] || opp.recommended_template}`);
   lines.push('');
 
-  // Signals
-  lines.push(`## Signals Collected: ${data.signals.total}`);
-  for (const [source, count] of Object.entries(data.signals.bySource)) {
-    lines.push(`- ${source}: ${count}`);
+  // Description
+  const descZh = opp.description_zh || opp.description || '';
+  lines.push(`> ${descZh}`);
+  lines.push('');
+
+  // Score breakdown bar
+  const dims = [
+    { label: '时效性', value: breakdown.time_sensitivity },
+    { label: '新颖度', value: breakdown.novelty },
+    { label: '可行性', value: breakdown.feasibility },
+    { label: 'SEO', value: breakdown.seo_potential },
+    { label: '需求', value: breakdown.demand },
+    { label: '变现', value: breakdown.monetization },
+  ];
+  const dimStr = dims
+    .filter(d => d.value != null)
+    .map(d => `${d.label}: ${d.value}`)
+    .join(' | ');
+  lines.push(`📊 ${dimStr}`);
+
+  // Source & traction
+  const sigs = (opp as any)._signals || [];
+  if (sigs.length > 0) {
+    const sig = sigs[0];
+    const traction = [];
+    if (sig.stars) traction.push(`${sig.stars} 赞`);
+    if (sig.comments_count) traction.push(`${sig.comments_count} 评论`);
+    lines.push(`📡 来源: ${sig.source} — ${traction.join(', ')}`);
+    lines.push(`🔗 ${sig.source_url}`);
   }
-  lines.push('');
 
-  // Opportunities
-  lines.push(`## Opportunities Found: ${data.opportunities.total}`);
-  if (data.opportunities.topScoring.length > 0) {
-    for (const opp of data.opportunities.topScoring) {
-      const score = typeof opp.score === 'number' ? opp.score.toFixed(1) : '?';
-      const emoji = parseFloat(score) >= 70 ? '🎯' : parseFloat(score) >= 50 ? '📊' : '❌';
-      lines.push(`${emoji} **${opp.title}** — Score: ${score}`);
-      lines.push(`   Keyword: \`${opp.target_keyword}\` | Template: ${opp.recommended_template} | Window: ${opp.window_status}`);
-    }
+  // Window
+  const windowLabel = WINDOW_STATUS_MAP[opp.window_status] || opp.window_status;
+  let windowDetail = `⏰ 窗口期: ${windowLabel}`;
+  if (opp.window_closes_at) {
+    const daysLeft = Math.ceil((new Date(opp.window_closes_at).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+    if (daysLeft > 0) windowDetail += ` (剩余约 ${daysLeft} 天)`;
+  }
+  lines.push(windowDetail);
+
+  // Keyword & effort
+  lines.push(`🔑 关键词: \`${opp.target_keyword}\` | 预估工作量: ${opp.estimated_effort || '未知'}`);
+
+  // Competitors
+  const competitors = opp.competitors || [];
+  if (competitors.length > 0) {
+    const compStr = competitors.map((c: any) => c.name || c).join(', ');
+    lines.push(`⚔️ 竞品: ${compStr}`);
   } else {
-    lines.push('- No new opportunities today');
+    lines.push(`⚔️ 竞品: 暂无直接竞品`);
   }
-  lines.push('');
 
-  // Cost
-  lines.push(`## Cost: $${data.cost.total.toFixed(4)} (${data.cost.apiCalls} API calls)`);
-  for (const [agent, cost] of Object.entries(data.cost.byAgent)) {
-    lines.push(`- ${agent}: $${cost.toFixed(4)}`);
+  // Recommended features
+  const features = opp.recommended_features_zh || opp.recommended_features || [];
+  if (features.length > 0) {
+    lines.push(`💡 建议功能: ${features.join('、')}`);
   }
-  lines.push('');
 
-  return lines.join('\n');
+  lines.push('');
+  return lines;
 }
 
 /**
- * Send report to Discord webhook
+ * Format complete report
  */
-async function sendToDiscord(content: string): Promise<boolean> {
+function formatReport(data: DailyReportData): string[] {
+  // Return array of message chunks (Discord 2000 char limit)
+  const messages: string[] = [];
+
+  // Header message
+  const header: string[] = [];
+  header.push(`# 📋 每日报告 — ${data.date}`);
+  header.push('');
+  header.push(`今日采集 **${data.signals.total}** 条信号，发现 **${data.opportunities.total}** 个机会`);
+  const sourceStr = Object.entries(data.signals.bySource)
+    .map(([source, count]) => `${source}: ${count}`)
+    .join(' | ');
+  header.push(`来源: ${sourceStr}`);
+  header.push('');
+  messages.push(header.join('\n'));
+
+  // Each opportunity as a separate message
+  if (data.opportunities.topScoring.length > 0) {
+    for (let i = 0; i < data.opportunities.topScoring.length; i++) {
+      const opp = data.opportunities.topScoring[i];
+      const card = formatOpportunityCard(opp, i + 1);
+      messages.push(card.join('\n'));
+    }
+  } else {
+    messages.push('今日无新机会');
+  }
+
+  // Cost footer
+  const footer: string[] = [];
+  footer.push(`---`);
+  footer.push(`💰 **成本**: $${data.cost.total.toFixed(4)} (${data.cost.apiCalls} 次调用)`);
+  const agentCosts = Object.entries(data.cost.byAgent)
+    .map(([agent, cost]) => `${agent}: $${cost.toFixed(4)}`)
+    .join(' | ');
+  if (agentCosts) footer.push(agentCosts);
+  messages.push(footer.join('\n'));
+
+  return messages;
+}
+
+/**
+ * Send report to Discord webhook (multi-message)
+ */
+async function sendToDiscord(messages: string[]): Promise<boolean> {
   if (!config.discord.webhookUrl) {
     console.log('[Report] No Discord webhook configured, skipping');
     return false;
   }
 
   try {
-    // Discord has a 2000 char limit per message
-    const chunks: string[] = [];
-    if (content.length <= 2000) {
-      chunks.push(content);
-    } else {
-      // Split by sections
-      const sections = content.split('\n## ');
-      let chunk = sections[0];
-      for (let i = 1; i < sections.length; i++) {
-        const section = '## ' + sections[i];
-        if (chunk.length + section.length + 1 > 2000) {
-          chunks.push(chunk);
-          chunk = section;
-        } else {
-          chunk += '\n' + section;
+    for (const msg of messages) {
+      // Split if a single message exceeds 2000 chars
+      const chunks: string[] = [];
+      if (msg.length <= 2000) {
+        chunks.push(msg);
+      } else {
+        // Split by lines, respecting limit
+        const lines = msg.split('\n');
+        let chunk = '';
+        for (const line of lines) {
+          if (chunk.length + line.length + 1 > 1900) {
+            chunks.push(chunk);
+            chunk = line;
+          } else {
+            chunk += (chunk ? '\n' : '') + line;
+          }
         }
-      }
-      if (chunk) chunks.push(chunk);
-    }
-
-    for (const chunk of chunks) {
-      const response = await fetch(config.discord.webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: chunk }),
-      });
-
-      if (!response.ok) {
-        console.error(`[Report] Discord send failed: ${response.status}`);
-        return false;
+        if (chunk) chunks.push(chunk);
       }
 
-      await new Promise(r => setTimeout(r, 500));
+      for (const chunk of chunks) {
+        const response = await fetch(config.discord.webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: chunk }),
+        });
+
+        if (!response.ok) {
+          console.error(`[Report] Discord send failed: ${response.status}`);
+          return false;
+        }
+        await new Promise(r => setTimeout(r, 500));
+      }
     }
 
     console.log('[Report] Sent to Discord');
@@ -173,12 +294,15 @@ export async function generateDailyReport(): Promise<void> {
   console.log('[Report] === Generating Daily Report ===');
 
   const data = await gatherReportData();
-  const report = formatReport(data);
+  const messages = formatReport(data);
 
-  console.log(report);
+  // Log full report
+  for (const msg of messages) {
+    console.log(msg);
+  }
 
   await saveReport(data);
-  await sendToDiscord(report);
+  await sendToDiscord(messages);
 
   console.log('[Report] === Report Complete ===');
 }

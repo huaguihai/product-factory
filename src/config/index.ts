@@ -16,7 +16,7 @@ export const config = {
   scout: {
     intervalHours: 4,
     maxSignalsPerRound: 30,
-    sources: ['github_trending', 'hackernews', 'producthunt', 'reddit'] as const,
+    sources: ['google_trends', 'tech_media', 'twitter_trends', 'github_trending', 'hackernews', 'producthunt', 'reddit'] as const,
   },
 
   // Analyst thresholds

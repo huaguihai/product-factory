@@ -12,6 +12,7 @@ interface DailyReportData {
   date: string;
   signals: { total: number; bySource: Record<string, number> };
   opportunities: { total: number; topScoring: any[] };
+  derivatives: { total: number; topScoring: any[] };
   cost: { total: number; byAgent: Record<string, number>; apiCalls: number };
 }
 
@@ -65,10 +66,20 @@ async function gatherReportData(): Promise<DailyReportData> {
   // Cost summary
   const cost = await getTodayCostSummary();
 
+  // Today's derivatives
+  const { data: derivatives } = await supabaseAdmin
+    .from('derived_products')
+    .select('id, title, slug, derivative_type, parent_topic, target_keywords, product_form, score, competition_level, monetization_strategy, build_effort, status')
+    .gte('created_at', startOfDay)
+    .lte('created_at', endOfDay)
+    .order('score', { ascending: false })
+    .limit(10);
+
   return {
     date: dateStr,
     signals: { total: signals?.length || 0, bySource },
     opportunities: { total: opportunities?.length || 0, topScoring: opportunities || [] },
+    derivatives: { total: derivatives?.length || 0, topScoring: derivatives || [] },
     cost,
   };
 }
@@ -118,12 +129,12 @@ function formatOpportunityCard(opp: any, index: number): string[] {
 
   // Score breakdown bar
   const dims = [
-    { label: '时效性', value: breakdown.time_sensitivity },
-    { label: '新颖度', value: breakdown.novelty },
-    { label: '可行性', value: breakdown.feasibility },
-    { label: 'SEO', value: breakdown.seo_potential },
-    { label: '需求', value: breakdown.demand },
+    { label: '开发速度', value: breakdown.development_speed },
     { label: '变现', value: breakdown.monetization },
+    { label: 'SEO', value: breakdown.seo_potential },
+    { label: '时效性', value: breakdown.time_sensitivity },
+    { label: '长尾', value: breakdown.longtail_value },
+    { label: '新颖度', value: breakdown.novelty },
   ];
   const dimStr = dims
     .filter(d => d.value != null)
@@ -182,9 +193,9 @@ function formatReport(data: DailyReportData): string[] {
 
   // Header message
   const header: string[] = [];
-  header.push(`# 📋 每日报告 — ${data.date}`);
+  header.push(`# 每日报告 — ${data.date}`);
   header.push('');
-  header.push(`今日采集 **${data.signals.total}** 条信号，发现 **${data.opportunities.total}** 个机会`);
+  header.push(`今日采集 **${data.signals.total}** 条信号，发现 **${data.opportunities.total}** 个机会，派生 **${data.derivatives.total}** 个产品创意`);
   const sourceStr = Object.entries(data.signals.bySource)
     .map(([source, count]) => `${source}: ${count}`)
     .join(' | ');
@@ -201,6 +212,24 @@ function formatReport(data: DailyReportData): string[] {
     }
   } else {
     messages.push('今日无新机会');
+  }
+
+  // Derivatives section
+  if (data.derivatives.topScoring.length > 0) {
+    const derivMsg: string[] = [];
+    derivMsg.push(`## 派生产品创意 (${data.derivatives.total})`);
+    derivMsg.push('');
+    for (const d of data.derivatives.topScoring) {
+      const score = typeof d.score === 'number' ? d.score.toFixed(0) : '?';
+      const keywords = (d.target_keywords || []).join(', ');
+      const monetization = (d.monetization_strategy || []).join(', ');
+      derivMsg.push(`**[${d.derivative_type}] ${d.title}** (${score}分)`);
+      derivMsg.push(`  来源: ${d.parent_topic}`);
+      derivMsg.push(`  关键词: ${keywords}`);
+      derivMsg.push(`  变现: ${monetization} | 工作量: ${d.build_effort} | 竞争: ${d.competition_level}`);
+      derivMsg.push('');
+    }
+    messages.push(derivMsg.join('\n'));
   }
 
   // Cost footer
@@ -277,12 +306,14 @@ async function saveReport(data: DailyReportData): Promise<void> {
     report_date: data.date,
     signals_collected: data.signals.total,
     opportunities_found: data.opportunities.total,
+    derivatives_created: data.derivatives.total,
     top_opportunities: data.opportunities.topScoring,
     total_llm_cost: data.cost.total,
     total_api_calls: data.cost.apiCalls,
     details: {
       signals_by_source: data.signals.bySource,
       cost_by_agent: data.cost.byAgent,
+      top_derivatives: data.derivatives.topScoring,
     },
   }, { onConflict: 'report_date' });
 }

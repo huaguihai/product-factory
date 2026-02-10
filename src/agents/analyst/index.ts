@@ -12,31 +12,38 @@ interface OpportunityAssessment {
   title: string;
   slug: string;
   description: string;
+  description_zh: string;
   target_keyword: string;
+  secondary_keywords: string[];
   category: string;
+  opportunity_type: 'direct' | 'derivative';
+  product_form: 'website' | 'mini_program' | 'both';
   score_breakdown: {
-    novelty: number;
-    demand: number;
-    feasibility: number;
+    development_speed: number;
+    monetization: number;
     seo_potential: number;
     time_sensitivity: number;
-    monetization: number;
+    longtail_value: number;
+    novelty: number;
   };
   window_days_remaining: number;
   competitors: Array<{ name: string; url: string; weakness: string }>;
   recommended_template: string;
   recommended_features: string[];
+  recommended_features_zh: string[];
   estimated_effort: string;
+  monetization_strategy: string[];
+  derivative_suggestions: string[];
   reasoning: string;
 }
 
-const SCORE_WEIGHTS = {
-  time_sensitivity: 0.25,
-  novelty: 0.20,
-  feasibility: 0.20,
-  seo_potential: 0.15,
-  demand: 0.10,
-  monetization: 0.10,
+const SCORE_WEIGHTS: Record<string, number> = {
+  development_speed: 0.20,
+  monetization: 0.20,
+  seo_potential: 0.20,
+  time_sensitivity: 0.15,
+  longtail_value: 0.15,
+  novelty: 0.10,
 };
 
 function calculateWeightedScore(breakdown: OpportunityAssessment['score_breakdown']): number {
@@ -45,23 +52,24 @@ function calculateWeightedScore(breakdown: OpportunityAssessment['score_breakdow
   }, 0);
 }
 
-const ANALYST_SYSTEM_PROMPT = `You are a senior product manager and SEO expert who discovers fast-to-monetize tech product opportunities.
+const ANALYST_SYSTEM_PROMPT = `You are a senior product strategist for an indie developer who builds lightweight websites and WeChat mini-programs for ad and affiliate monetization.
 
-Your evaluation criteria:
+Your evaluation criteria (each scored 0-100):
 
-1. **Novelty (0-100)**: How new is this? How many competitors exist? Higher = less competition.
-2. **Demand (0-100)**: Community discussion heat? Are users searching for solutions?
-3. **Feasibility (0-100)**: Can we build this with a template? (tutorial/tool/comparison site)
-4. **SEO Potential (0-100)**: Keyword search volume estimate, competition level, long-tail potential.
-5. **Time Sensitivity (0-100)**: How urgent is the window? Will big players move in soon?
-6. **Monetization (0-100)**: AdSense CPC estimate, traffic ceiling, user dwell time.
+1. **Development Speed (0-100)**: Can we build this in < 1 day using a template? Higher = faster to build. Tutorial sites and comparison pages score high; complex interactive tools score low.
+2. **Monetization (0-100)**: AdSense CPC estimate for this niche, affiliate program availability, traffic ceiling, user dwell time. High CPC niches (finance, SaaS tools) score higher.
+3. **SEO Potential (0-100)**: Keyword search volume estimate, competition level from existing sites, long-tail keyword opportunities, SERP feature opportunities (featured snippets, People Also Ask).
+4. **Time Sensitivity (0-100)**: How urgent is the window? Will big players and content farms cover this soon? Higher = more urgent, must act now.
+5. **Long-tail Value (0-100)**: Will people still search for this in 3-6 months? Evergreen topics score high; one-week viral spikes score low.
+6. **Novelty (0-100)**: How new is this? How few competitors exist? Higher = less competition, more room for a new site.
 
 Key principles:
-- Score > 70 is worth building
-- Window < 7 days should be marked urgent
-- Mature products with many tutorials → low score
-- "New" matters more than "good"
-- Be specific about target keyword and competitors`;
+- Score > 70 is worth building immediately
+- Score 55-70 is worth deriving specific product ideas from
+- Prioritize topics where a focused, well-built page can rank on page 1
+- Consider DERIVATIVE opportunities: tutorials, comparisons, directories, prompt guides, cheatsheets
+- Think about monetization concretely: which affiliate programs, what AdSense CPC range
+- "New + searchable + buildable in 1 day" is the sweet spot`;
 
 /**
  * Evaluate a single analyzed signal
@@ -69,7 +77,7 @@ Key principles:
 async function evaluateSignal(signal: any): Promise<OpportunityAssessment | null> {
   const aiAssessment = signal.raw_data?.ai_assessment || {};
 
-  const prompt = `Evaluate this emerging tech signal as a product opportunity.
+  const prompt = `Evaluate this emerging tech signal as a product opportunity for an indie developer.
 
 Signal:
 - Title: ${signal.title}
@@ -85,24 +93,30 @@ Respond with JSON:
 {
   "title": "SEO-friendly opportunity title (English)",
   "slug": "url-safe-slug",
-  "description": "2-3 sentence description (English)",
+  "description": "2-3 sentence description of the opportunity (English)",
   "description_zh": "2-3句中文描述：这个项目是什么、为什么现在是机会、我们可以做什么",
-  "target_keyword": "primary SEO keyword",
-  "category": "ai_tool|dev_tool|saas|framework|tutorial|utility",
+  "target_keyword": "primary SEO keyword (e.g. 'seedance tutorial', 'seedance vs kling')",
+  "secondary_keywords": ["related keyword 1", "related keyword 2", "related keyword 3"],
+  "category": "ai_tool|dev_tool|saas|framework|tutorial|utility|trending_topic",
+  "opportunity_type": "direct or derivative",
+  "product_form": "website|mini_program|both",
   "score_breakdown": {
-    "novelty": 0-100,
-    "demand": 0-100,
-    "feasibility": 0-100,
+    "development_speed": 0-100,
+    "monetization": 0-100,
     "seo_potential": 0-100,
     "time_sensitivity": 0-100,
-    "monetization": 0-100
+    "longtail_value": 0-100,
+    "novelty": 0-100
   },
   "window_days_remaining": number,
   "competitors": [{"name": "...", "url": "...", "weakness": "..."}],
-  "recommended_template": "tutorial-site|tool-site|comparison-site|cheatsheet-site|playground-site|resource-site",
+  "recommended_template": "tutorial-site|tool-site|comparison-site|cheatsheet-site|playground-site|resource-site|directory-site",
+  "recommended_features": ["feature 1", "feature 2"],
   "recommended_features_zh": ["功能建议1（中文）", "功能建议2（中文）"],
-  "estimated_effort": "2h|4h|1d|2d|3d|1w",
-  "reasoning": "Detailed reasoning for scores"
+  "estimated_effort": "2h|4h|1d|2d|3d",
+  "monetization_strategy": ["adsense", "affiliate", "referral", "sponsored"],
+  "derivative_suggestions": ["tutorial: how to use X", "comparison: X vs Y vs Z", "directory: best X alternatives"],
+  "reasoning": "Detailed reasoning for scores, focusing on why this is or isn't a good opportunity for a quick, ad-monetized site"
 }`;
 
   return await aiGenerateJson<OpportunityAssessment>(prompt, {
@@ -250,9 +264,10 @@ export async function runAnalyst(): Promise<{ evaluated: number; opportunities: 
       title: assessment.title,
       slug,
       description: assessment.description,
-      description_zh: (assessment as any).description_zh || null,
+      description_zh: assessment.description_zh || null,
       category: assessment.category,
       target_keyword: assessment.target_keyword,
+      secondary_keywords: assessment.secondary_keywords || [],
       score,
       score_breakdown: assessment.score_breakdown,
       window_opens_at: signal.first_seen_at,
@@ -261,10 +276,14 @@ export async function runAnalyst(): Promise<{ evaluated: number; opportunities: 
       competitors: assessment.competitors,
       search_volume: null,
       recommended_template: assessment.recommended_template,
-      recommended_features: assessment.recommended_features,
-      recommended_features_zh: (assessment as any).recommended_features_zh || null,
+      recommended_features: assessment.recommended_features || [],
+      recommended_features_zh: assessment.recommended_features_zh || [],
       estimated_effort: assessment.estimated_effort,
-      status: score >= 80 ? 'evaluated' : score >= 50 ? 'evaluated' : 'rejected',
+      opportunity_type: assessment.opportunity_type || 'direct',
+      product_form: assessment.product_form || 'website',
+      monetization_strategy: assessment.monetization_strategy || [],
+      derivative_suggestions: assessment.derivative_suggestions || [],
+      status: score >= 50 ? 'evaluated' : 'rejected',
       decision_reason: score < 50 ? `Score too low: ${score.toFixed(1)}` : null,
       decided_by: score < 50 ? 'auto' : 'human',
     });

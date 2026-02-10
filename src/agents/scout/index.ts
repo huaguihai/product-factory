@@ -37,8 +37,12 @@ interface PreFilterResult {
   is_emerging: boolean;
   novelty_reason: string;
   category: string;
+  target_audience: string;
   potential_products: string[];
+  user_pain_points: string[];
+  derivative_angles: string[];
   urgency: 'high' | 'medium' | 'low';
+  longtail_potential: 'high' | 'medium' | 'low';
 }
 
 /**
@@ -74,6 +78,11 @@ Signal:
 - Source: ${signal.source}
 - Traction: ${signal.stars} stars/votes
 
+Additionally, identify:
+- User pain points: What specific things are people searching for or asking about? (e.g., "how to use Seedance", "Seedance vs Kling", "Seedance pricing", "Seedance alternatives")
+- Derivative product angles: What lightweight products could address these needs? (e.g., tutorial site, comparison page, prompt guide, tool directory, pricing calculator)
+- Long-tail potential: Will people still search for this in 3-6 months, or is it a one-week spike?
+
 Respond in JSON:
 {
   "is_emerging": boolean,
@@ -81,7 +90,10 @@ Respond in JSON:
   "category": "ai_tool|consumer_app|dev_tool|saas|framework|trending_topic|other",
   "target_audience": "general_public|prosumer|developer|niche",
   "potential_products": ["tutorial site", "how-to guide", "comparison page", "tool directory", etc.],
-  "urgency": "high|medium|low"
+  "user_pain_points": ["how to use X", "X vs Y comparison", "X pricing/free alternatives", etc.],
+  "derivative_angles": ["tutorial", "comparison", "directory", "prompt_guide", "calculator", "cheatsheet", etc.],
+  "urgency": "high|medium|low",
+  "longtail_potential": "high|medium|low"
 }
 
 Prioritize signals with LARGE audiences. A trending AI video tool used by millions beats a niche Rust library used by hundreds.`;

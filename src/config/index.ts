@@ -33,4 +33,26 @@ export const config = {
     sonnetInputPer1k: 0.003,
     sonnetOutputPer1k: 0.015,
   },
+
+  // Deriver: demand derivation from opportunities
+  deriver: {
+    minScore: 55,                // Minimum opportunity score to derive from
+    maxDerivativesPerTopic: 5,   // Max derivatives per opportunity
+    minDerivativeScore: 40,      // Minimum derivative score to keep
+    maxPerRun: 10,               // Max opportunities to process per run
+  },
+
+  // Competitive check: SERP analysis
+  competitive: {
+    serpApiKey: process.env.SERP_API_KEY || '',
+    googleCseKey: process.env.GOOGLE_CSE_KEY || '',
+    googleCseId: process.env.GOOGLE_CSE_ID || '',
+    maxChecksPerRun: 10,
+    bigSiteDomainThreshold: 7,   // If 7+ of top 10 are big sites, reject
+  },
+
+  // Keyword validation
+  keywordValidator: {
+    maxPerRun: 15,
+  },
 } as const;

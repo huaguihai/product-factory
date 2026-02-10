@@ -55,4 +55,9 @@ export const config = {
   keywordValidator: {
     maxPerRun: 15,
   },
+
+  // GitHub Pages reports
+  githubPages: {
+    baseUrl: process.env.GITHUB_PAGES_URL || 'https://huaguihai.github.io/product-factory',
+  },
 } as const;

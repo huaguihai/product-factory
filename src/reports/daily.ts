@@ -1,12 +1,14 @@
 /**
  * Daily Report Generator
- * Generates and sends daily summary via Discord webhook
+ * Generates and sends daily summary via Discord webhook and GitHub Pages
  */
 
 import { supabaseAdmin } from '../db/supabase';
 import { getTodayCostSummary } from '../ai/cost-tracker';
 import { config } from '../config';
 import { today } from '../utils/helpers';
+import * as fs from 'fs';
+import * as path from 'path';
 
 interface DailyReportData {
   date: string;
@@ -246,51 +248,222 @@ function formatReport(data: DailyReportData): string[] {
 }
 
 /**
- * Send report to Discord webhook (multi-message)
+ * Format the full report as a single Markdown document (for GitHub Pages)
  */
-async function sendToDiscord(messages: string[]): Promise<boolean> {
+function formatFullMarkdown(data: DailyReportData): string {
+  const lines: string[] = [];
+
+  // YAML front matter for Jekyll
+  lines.push('---');
+  lines.push(`layout: default`);
+  lines.push(`title: "Daily Report - ${data.date}"`);
+  lines.push('---');
+  lines.push('');
+
+  lines.push(`# Daily Report — ${data.date}`);
+  lines.push('');
+  lines.push(`[← Back to Index](../)`);
+  lines.push('');
+
+  // Summary
+  lines.push(`## Summary`);
+  lines.push('');
+  lines.push(`| Metric | Value |`);
+  lines.push(`|--------|-------|`);
+  lines.push(`| Signals Collected | ${data.signals.total} |`);
+  lines.push(`| Opportunities Found | ${data.opportunities.total} |`);
+  lines.push(`| Derivatives Created | ${data.derivatives.total} |`);
+  lines.push(`| LLM Cost | $${data.cost.total.toFixed(4)} |`);
+  lines.push(`| API Calls | ${data.cost.apiCalls} |`);
+  lines.push('');
+
+  // Sources breakdown
+  const sourceEntries = Object.entries(data.signals.bySource);
+  if (sourceEntries.length > 0) {
+    lines.push(`### Signal Sources`);
+    lines.push('');
+    lines.push(`| Source | Count |`);
+    lines.push(`|--------|-------|`);
+    for (const [source, count] of sourceEntries) {
+      lines.push(`| ${source} | ${count} |`);
+    }
+    lines.push('');
+  }
+
+  // Opportunities
+  if (data.opportunities.topScoring.length > 0) {
+    lines.push(`## Top Opportunities`);
+    lines.push('');
+    for (let i = 0; i < data.opportunities.topScoring.length; i++) {
+      const opp = data.opportunities.topScoring[i];
+      const card = formatOpportunityCard(opp, i + 1);
+      lines.push(...card);
+    }
+  }
+
+  // Derivatives
+  if (data.derivatives.topScoring.length > 0) {
+    lines.push(`## Derivative Product Ideas (${data.derivatives.total})`);
+    lines.push('');
+    lines.push(`| Type | Title | Score | Keywords | Monetization | Effort | Competition |`);
+    lines.push(`|------|-------|-------|----------|-------------|--------|-------------|`);
+    for (const d of data.derivatives.topScoring) {
+      const score = typeof d.score === 'number' ? d.score.toFixed(0) : '?';
+      const keywords = (d.target_keywords || []).slice(0, 3).join(', ');
+      const monetization = (d.monetization_strategy || []).join(', ');
+      lines.push(`| ${d.derivative_type} | ${d.title} | ${score} | ${keywords} | ${monetization} | ${d.build_effort} | ${d.competition_level || '-'} |`);
+    }
+    lines.push('');
+
+    // Detailed derivative cards
+    for (const d of data.derivatives.topScoring) {
+      const score = typeof d.score === 'number' ? d.score.toFixed(0) : '?';
+      lines.push(`### [${d.derivative_type}] ${d.title} (${score})`);
+      lines.push('');
+      lines.push(`- **Parent Topic**: ${d.parent_topic}`);
+      lines.push(`- **Keywords**: ${(d.target_keywords || []).join(', ')}`);
+      lines.push(`- **Product Form**: ${d.product_form}`);
+      lines.push(`- **Monetization**: ${(d.monetization_strategy || []).join(', ')}`);
+      lines.push(`- **Build Effort**: ${d.build_effort}`);
+      lines.push(`- **Competition**: ${d.competition_level || 'unknown'}`);
+      lines.push(`- **Status**: ${d.status}`);
+      lines.push('');
+    }
+  }
+
+  // Cost breakdown
+  lines.push(`## Cost Breakdown`);
+  lines.push('');
+  lines.push(`| Agent | Cost |`);
+  lines.push(`|-------|------|`);
+  for (const [agent, cost] of Object.entries(data.cost.byAgent)) {
+    lines.push(`| ${agent} | $${cost.toFixed(4)} |`);
+  }
+  lines.push(`| **Total** | **$${data.cost.total.toFixed(4)}** |`);
+  lines.push('');
+
+  return lines.join('\n');
+}
+
+/**
+ * Save report as Markdown file to docs/reports/
+ */
+function saveMarkdownReport(data: DailyReportData, markdown: string): string | null {
+  try {
+    const docsDir = path.resolve(__dirname, '../../docs/reports');
+    if (!fs.existsSync(docsDir)) {
+      fs.mkdirSync(docsDir, { recursive: true });
+    }
+
+    const filename = `${data.date}.md`;
+    const filepath = path.join(docsDir, filename);
+    fs.writeFileSync(filepath, markdown, 'utf-8');
+    console.log(`[Report] Saved markdown: ${filepath}`);
+    return filepath;
+  } catch (error) {
+    console.error('[Report] Failed to save markdown:', error);
+    return null;
+  }
+}
+
+/**
+ * Update the docs/index.md with the new report link
+ */
+function updateReportIndex(data: DailyReportData): void {
+  try {
+    const indexPath = path.resolve(__dirname, '../../docs/index.md');
+    if (!fs.existsSync(indexPath)) return;
+
+    let content = fs.readFileSync(indexPath, 'utf-8');
+
+    const reportLink = `- [${data.date}](reports/${data.date}) — ${data.signals.total} signals, ${data.opportunities.total} opportunities, ${data.derivatives.total} derivatives, $${data.cost.total.toFixed(4)}`;
+
+    const startMarker = '<!-- REPORT_INDEX_START -->';
+    const endMarker = '<!-- REPORT_INDEX_END -->';
+
+    const startIdx = content.indexOf(startMarker);
+    const endIdx = content.indexOf(endMarker);
+
+    if (startIdx !== -1 && endIdx !== -1) {
+      const before = content.substring(0, startIdx + startMarker.length);
+      const existingContent = content.substring(startIdx + startMarker.length, endIdx).trim();
+      const after = content.substring(endIdx);
+
+      // Remove placeholder text if it's the first report
+      const existingLines = existingContent
+        .split('\n')
+        .filter(line => line.trim() && !line.includes('No reports yet'));
+
+      // Add new report at the top (most recent first)
+      existingLines.unshift(reportLink);
+
+      content = before + '\n' + existingLines.join('\n') + '\n' + after;
+      fs.writeFileSync(indexPath, content, 'utf-8');
+      console.log('[Report] Updated index.md');
+    }
+  } catch (error) {
+    console.error('[Report] Failed to update index:', error);
+  }
+}
+
+/**
+ * Send report to Discord webhook (summary + GitHub Pages link)
+ */
+async function sendToDiscord(data: DailyReportData): Promise<boolean> {
   if (!config.discord.webhookUrl) {
     console.log('[Report] No Discord webhook configured, skipping');
     return false;
   }
 
   try {
-    for (const msg of messages) {
-      // Split if a single message exceeds 2000 chars
-      const chunks: string[] = [];
-      if (msg.length <= 2000) {
-        chunks.push(msg);
-      } else {
-        // Split by lines, respecting limit
-        const lines = msg.split('\n');
-        let chunk = '';
-        for (const line of lines) {
-          if (chunk.length + line.length + 1 > 1900) {
-            chunks.push(chunk);
-            chunk = line;
-          } else {
-            chunk += (chunk ? '\n' : '') + line;
-          }
-        }
-        if (chunk) chunks.push(chunk);
-      }
+    // Build a compact summary for Discord
+    const summary: string[] = [];
+    summary.push(`# Daily Report — ${data.date}`);
+    summary.push('');
+    summary.push(`Signals: **${data.signals.total}** | Opportunities: **${data.opportunities.total}** | Derivatives: **${data.derivatives.total}** | Cost: **$${data.cost.total.toFixed(4)}**`);
 
-      for (const chunk of chunks) {
-        const response = await fetch(config.discord.webhookUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: chunk }),
-        });
-
-        if (!response.ok) {
-          console.error(`[Report] Discord send failed: ${response.status}`);
-          return false;
-        }
-        await new Promise(r => setTimeout(r, 500));
+    // Top 3 opportunities (compact)
+    if (data.opportunities.topScoring.length > 0) {
+      summary.push('');
+      summary.push('**Top Opportunities:**');
+      for (let i = 0; i < Math.min(3, data.opportunities.topScoring.length); i++) {
+        const opp = data.opportunities.topScoring[i];
+        const score = typeof opp.score === 'number' ? opp.score.toFixed(0) : '?';
+        summary.push(`${i + 1}. **${opp.title}** (${score}) — \`${opp.target_keyword}\``);
       }
     }
 
-    console.log('[Report] Sent to Discord');
+    // Top 3 derivatives (compact)
+    if (data.derivatives.topScoring.length > 0) {
+      summary.push('');
+      summary.push('**Top Derivatives:**');
+      for (let i = 0; i < Math.min(3, data.derivatives.topScoring.length); i++) {
+        const d = data.derivatives.topScoring[i];
+        const score = typeof d.score === 'number' ? d.score.toFixed(0) : '?';
+        summary.push(`${i + 1}. [${d.derivative_type}] **${d.title}** (${score})`);
+      }
+    }
+
+    // GitHub Pages link
+    if (config.githubPages.baseUrl) {
+      summary.push('');
+      summary.push(`Full report: ${config.githubPages.baseUrl}/reports/${data.date}`);
+    }
+
+    const content = summary.join('\n');
+
+    const response = await fetch(config.discord.webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+
+    if (!response.ok) {
+      console.error(`[Report] Discord send failed: ${response.status}`);
+      return false;
+    }
+
+    console.log('[Report] Sent summary to Discord');
     return true;
   } catch (error) {
     console.error('[Report] Discord error:', error);
@@ -325,15 +498,23 @@ export async function generateDailyReport(): Promise<void> {
   console.log('[Report] === Generating Daily Report ===');
 
   const data = await gatherReportData();
-  const messages = formatReport(data);
 
-  // Log full report
+  // Generate full markdown for GitHub Pages
+  const markdown = formatFullMarkdown(data);
+  saveMarkdownReport(data, markdown);
+  updateReportIndex(data);
+
+  // Log summary to console
+  const messages = formatReport(data);
   for (const msg of messages) {
     console.log(msg);
   }
 
+  // Save to database
   await saveReport(data);
-  await sendToDiscord(messages);
+
+  // Send compact summary to Discord (with link to full report)
+  await sendToDiscord(data);
 
   console.log('[Report] === Report Complete ===');
 }

@@ -29,6 +29,49 @@ interface DerivationResponse {
   derivatives: DerivativeProduct[];
 }
 
+const VALID_BUILD_EFFORTS = ['2h', '4h', '1d', '2d', '3d'] as const;
+const VALID_COMPETITION_LEVELS = ['low', 'medium', 'high', 'unknown'] as const;
+const VALID_SEARCH_VOLUMES = ['high', 'medium', 'low', 'unknown'] as const;
+const VALID_PRODUCT_FORMS = ['website', 'mini_program', 'both'] as const;
+
+function normalizeBuildEffort(val: string): string {
+  if (VALID_BUILD_EFFORTS.includes(val as any)) return val;
+  // Map common AI variations
+  const v = val.toLowerCase().trim();
+  if (v.includes('hour') || v.includes('2h') || v === '< 2h' || v === '<2h') return '2h';
+  if (v.includes('4h') || v === 'half day' || v === 'half-day') return '4h';
+  if (v === '1 day' || v === '1day' || v === '1d' || v === '< 1d' || v === '<1d') return '1d';
+  if (v === '2 days' || v === '2days' || v === '2d') return '2d';
+  if (v === '3 days' || v === '3days' || v === '3d' || v.includes('week') || v.includes('5d') || v.includes('4d')) return '3d';
+  return '1d'; // safe default
+}
+
+function normalizeCompetitionLevel(val: string): string {
+  if (VALID_COMPETITION_LEVELS.includes(val as any)) return val;
+  const v = val.toLowerCase().trim();
+  if (v.includes('low') || v === 'easy') return 'low';
+  if (v.includes('med') || v === 'moderate') return 'medium';
+  if (v.includes('high') || v === 'hard' || v === 'difficult') return 'high';
+  return 'unknown';
+}
+
+function normalizeSearchVolume(val: string): string {
+  if (VALID_SEARCH_VOLUMES.includes(val as any)) return val;
+  const v = val.toLowerCase().trim();
+  if (v.includes('high')) return 'high';
+  if (v.includes('med')) return 'medium';
+  if (v.includes('low')) return 'low';
+  return 'unknown';
+}
+
+function normalizeProductForm(val: string): string {
+  if (VALID_PRODUCT_FORMS.includes(val as any)) return val;
+  const v = val.toLowerCase().trim();
+  if (v.includes('both')) return 'both';
+  if (v.includes('mini') || v.includes('wechat')) return 'mini_program';
+  return 'website';
+}
+
 const DERIVER_SYSTEM_PROMPT = `You are a product strategist for an indie developer who builds lightweight websites and WeChat mini-programs for ad and affiliate monetization.
 
 Your job is to take a trending topic and identify SPECIFIC, ACTIONABLE derivative product ideas that:
@@ -232,6 +275,11 @@ export async function runDeriver(): Promise<{
         continue;
       }
 
+      const normalizedBuildEffort = normalizeBuildEffort(d.build_effort || '1d');
+      const normalizedCompetition = normalizeCompetitionLevel(d.competition_level || 'unknown');
+      const normalizedVolume = normalizeSearchVolume(d.estimated_search_volume || 'unknown');
+      const normalizedForm = normalizeProductForm(d.product_form || 'website');
+
       const { error } = await supabaseAdmin.from('derived_products').insert({
         opportunity_id: opp.id,
         signal_id: opp.signal_ids?.[0] || null,
@@ -241,11 +289,11 @@ export async function runDeriver(): Promise<{
         slug,
         description: d.description,
         target_keywords: d.target_keywords || [],
-        product_form: d.product_form || 'website',
-        estimated_search_volume: d.estimated_search_volume || 'unknown',
-        competition_level: d.competition_level || 'unknown',
+        product_form: normalizedForm,
+        estimated_search_volume: normalizedVolume,
+        competition_level: normalizedCompetition,
         monetization_strategy: d.monetization_strategy || [],
-        build_effort: d.build_effort || '1d',
+        build_effort: normalizedBuildEffort,
         ai_reasoning: d.reasoning,
         score: d.score,
         score_breakdown: {

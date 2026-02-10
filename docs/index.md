@@ -10,7 +10,7 @@ AI-powered product discovery and opportunity evaluation reports.
 ## Recent Reports
 
 <!-- REPORT_INDEX_START -->
-_No reports yet. Reports will be added automatically as they are generated._
+- [2026-02-10](reports/2026-02-10) — 103 signals, 4 opportunities, 10 derivatives, $1.4902
 <!-- REPORT_INDEX_END -->
 
 ---

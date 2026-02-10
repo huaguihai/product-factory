@@ -13,8 +13,13 @@ import { scrapeReddit } from './sources/reddit';
 import { scrapeGoogleTrends } from './sources/google-trends';
 import { scrapeTechMedia } from './sources/tech-media-rss';
 import { scrapeTwitterTrends } from './sources/twitter-trends';
+import { scrapeYouTubeSuggestions } from './sources/youtube-suggestions';
+import { scrapeGooglePAA } from './sources/google-paa';
+import { scrapeZhihu } from './sources/zhihu';
+import { scrapeChromeWebStore } from './sources/chrome-webstore';
+import { scrapeIndieHackers } from './sources/indiehackers';
 
-type SourceName = 'github_trending' | 'hackernews' | 'producthunt' | 'reddit' | 'google_trends' | 'tech_media' | 'twitter_trends';
+type SourceName = 'github_trending' | 'hackernews' | 'producthunt' | 'reddit' | 'google_trends' | 'tech_media' | 'twitter_trends' | 'youtube_suggestions' | 'google_paa' | 'zhihu' | 'chrome_webstore' | 'indiehackers';
 
 const SOURCE_SCRAPERS: Record<SourceName, () => Promise<{ scraped: number; saved: number }>> = {
   github_trending: scrapeGitHubTrending,
@@ -24,14 +29,20 @@ const SOURCE_SCRAPERS: Record<SourceName, () => Promise<{ scraped: number; saved
   google_trends: scrapeGoogleTrends,
   tech_media: scrapeTechMedia,
   twitter_trends: scrapeTwitterTrends,
+  youtube_suggestions: scrapeYouTubeSuggestions,
+  google_paa: scrapeGooglePAA,
+  zhihu: scrapeZhihu,
+  chrome_webstore: scrapeChromeWebStore,
+  indiehackers: scrapeIndieHackers,
 };
 
 // Rotate sources: each run picks 2 sources
 // google_trends, tech_media, and twitter_trends run every cycle (consumer-facing, high priority)
+// user intent sources run every cycle (directly reflect pain points)
 // developer sources rotate among themselves
 let devSourceIndex = 0;
-const DEV_SOURCES: SourceName[] = ['github_trending', 'hackernews', 'producthunt', 'reddit'];
-const ALWAYS_SOURCES: SourceName[] = ['google_trends', 'tech_media', 'twitter_trends'];
+const DEV_SOURCES: SourceName[] = ['github_trending', 'hackernews', 'producthunt', 'reddit', 'chrome_webstore', 'indiehackers'];
+const ALWAYS_SOURCES: SourceName[] = ['google_trends', 'tech_media', 'twitter_trends', 'youtube_suggestions', 'google_paa', 'zhihu'];
 
 interface PreFilterResult {
   is_emerging: boolean;

@@ -18,8 +18,13 @@ import { scrapeGooglePAA } from './sources/google-paa';
 import { scrapeZhihu } from './sources/zhihu';
 import { scrapeChromeWebStore } from './sources/chrome-webstore';
 import { scrapeIndieHackers } from './sources/indiehackers';
+import { scrapeGumroad } from './sources/gumroad';
+import { scrapeExplodingTopics } from './sources/exploding-topics';
+import { scrapeTechmeme } from './sources/techmeme';
+import { scrapeBestBlogs } from './sources/bestblogs';
+import { scrapeQuora } from './sources/quora';
 
-type SourceName = 'github_trending' | 'hackernews' | 'producthunt' | 'reddit' | 'google_trends' | 'tech_media' | 'twitter_trends' | 'youtube_suggestions' | 'google_paa' | 'zhihu' | 'chrome_webstore' | 'indiehackers';
+type SourceName = 'github_trending' | 'hackernews' | 'producthunt' | 'reddit' | 'google_trends' | 'tech_media' | 'twitter_trends' | 'youtube_suggestions' | 'google_paa' | 'zhihu' | 'chrome_webstore' | 'indiehackers' | 'gumroad' | 'exploding_topics' | 'techmeme' | 'bestblogs' | 'quora';
 
 const SOURCE_SCRAPERS: Record<SourceName, () => Promise<{ scraped: number; saved: number }>> = {
   github_trending: scrapeGitHubTrending,
@@ -34,6 +39,11 @@ const SOURCE_SCRAPERS: Record<SourceName, () => Promise<{ scraped: number; saved
   zhihu: scrapeZhihu,
   chrome_webstore: scrapeChromeWebStore,
   indiehackers: scrapeIndieHackers,
+  gumroad: scrapeGumroad,
+  exploding_topics: scrapeExplodingTopics,
+  techmeme: scrapeTechmeme,
+  bestblogs: scrapeBestBlogs,
+  quora: scrapeQuora,
 };
 
 // Rotate sources: each run picks 2 sources
@@ -41,8 +51,8 @@ const SOURCE_SCRAPERS: Record<SourceName, () => Promise<{ scraped: number; saved
 // user intent sources run every cycle (directly reflect pain points)
 // developer sources rotate among themselves
 let devSourceIndex = 0;
-const DEV_SOURCES: SourceName[] = ['github_trending', 'hackernews', 'producthunt', 'reddit', 'chrome_webstore', 'indiehackers'];
-const ALWAYS_SOURCES: SourceName[] = ['google_trends', 'tech_media', 'twitter_trends', 'youtube_suggestions', 'google_paa', 'zhihu'];
+const DEV_SOURCES: SourceName[] = ['github_trending', 'hackernews', 'producthunt', 'reddit', 'chrome_webstore', 'indiehackers', 'gumroad', 'quora'];
+const ALWAYS_SOURCES: SourceName[] = ['google_trends', 'tech_media', 'twitter_trends', 'youtube_suggestions', 'google_paa', 'zhihu', 'exploding_topics', 'techmeme', 'bestblogs'];
 
 interface PreFilterResult {
   is_emerging: boolean;

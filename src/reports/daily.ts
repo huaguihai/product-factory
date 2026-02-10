@@ -14,7 +14,7 @@ interface DailyReportData {
   date: string;
   signals: { total: number; bySource: Record<string, number> };
   opportunities: { total: number; topScoring: any[] };
-  derivatives: { total: number; topScoring: any[] };
+  derivatives: { total: number; validated: number; rejected: number; topScoring: any[] };
   cost: { total: number; byAgent: Record<string, number>; apiCalls: number };
 }
 
@@ -41,13 +41,13 @@ async function gatherReportData(): Promise<DailyReportData> {
   // Today's opportunities with full details
   const { data: opportunities } = await supabaseAdmin
     .from('opportunities')
-    .select('title, slug, score, score_breakdown, target_keyword, recommended_template, recommended_features, recommended_features_zh, window_status, window_closes_at, competitors, description, description_zh, category, signal_ids, estimated_effort, status')
+    .select('title, slug, score, score_breakdown, target_keyword, recommended_template, recommended_features, recommended_features_zh, window_status, window_closes_at, competitors, description, description_zh, category, signal_ids, estimated_effort, monetization_strategy, status')
     .gte('created_at', startOfDay)
     .lte('created_at', endOfDay)
     .order('score', { ascending: false })
     .limit(5);
 
-  // Fetch related signals for source URLs and traction data
+  // Fetch related signals for source URLs
   if (opportunities && opportunities.length > 0) {
     const allSignalIds = opportunities.flatMap((o: any) => o.signal_ids || []);
     if (allSignalIds.length > 0) {
@@ -55,8 +55,6 @@ async function gatherReportData(): Promise<DailyReportData> {
         .from('signals')
         .select('id, source, source_url, stars, comments_count, title')
         .in('id', allSignalIds);
-
-      // Attach signal data to opportunities
       const signalMap = new Map((relatedSignals || []).map((s: any) => [s.id, s]));
       for (const opp of opportunities) {
         const ids = (opp as any).signal_ids || [];
@@ -75,22 +73,28 @@ async function gatherReportData(): Promise<DailyReportData> {
     .gte('created_at', startOfDay)
     .lte('created_at', endOfDay)
     .order('score', { ascending: false })
-    .limit(10);
+    .limit(15);
+
+  const validated = (derivatives || []).filter((d: any) => d.status === 'validated').length;
+  const rejected = (derivatives || []).filter((d: any) => d.status === 'rejected').length;
 
   return {
     date: dateStr,
     signals: { total: signals?.length || 0, bySource },
     opportunities: { total: opportunities?.length || 0, topScoring: opportunities || [] },
-    derivatives: { total: derivatives?.length || 0, topScoring: derivatives || [] },
+    derivatives: { total: derivatives?.length || 0, validated, rejected, topScoring: derivatives || [] },
     cost,
   };
 }
 
-const WINDOW_STATUS_MAP: Record<string, string> = {
-  'open': '开放中',
-  'closing': '即将关闭',
-  'upcoming': '即将开放',
-  'closed': '已关闭',
+const SOURCE_MAP: Record<string, string> = {
+  google_trends: 'Google Trends',
+  tech_media: '科技媒体',
+  twitter_trends: 'Twitter/X',
+  github_trending: 'GitHub',
+  hackernews: 'Hacker News',
+  product_hunt: 'Product Hunt',
+  reddit: 'Reddit',
 };
 
 const TEMPLATE_MAP: Record<string, string> = {
@@ -100,268 +104,300 @@ const TEMPLATE_MAP: Record<string, string> = {
   'cheatsheet-site': '速查表',
   'playground-site': '在线体验',
   'resource-site': '资源站',
+  'directory-site': '目录站',
 };
 
-const CATEGORY_MAP: Record<string, string> = {
-  'ai_tool': 'AI 工具',
-  'dev_tool': '开发工具',
-  'saas': 'SaaS',
-  'framework': '框架',
-  'tutorial': '教程',
-  'utility': '实用工具',
+const DERIV_TYPE_MAP: Record<string, string> = {
+  tutorial: '教程',
+  comparison: '对比',
+  directory: '目录',
+  tool: '工具',
+  prompt_guide: 'Prompt 指南',
+  template_gallery: '模板库',
+  cheatsheet: '速查表',
+  aggregator: '聚合器',
+  calculator: '计算器',
+  landing_page: '落地页',
 };
 
-/**
- * Format a single opportunity as a detailed card
- */
-function formatOpportunityCard(opp: any, index: number): string[] {
-  const lines: string[] = [];
-  const score = typeof opp.score === 'number' ? opp.score.toFixed(1) : '?';
-  const breakdown = opp.score_breakdown || {};
+const EFFORT_MAP: Record<string, string> = {
+  '2h': '2小时',
+  '4h': '半天',
+  '1d': '1天',
+  '2d': '2天',
+  '3d': '3天',
+};
 
-  // Header
-  lines.push(`### ${index}. ${opp.title}`);
-  lines.push(`**综合评分: ${score}** | ${CATEGORY_MAP[opp.category] || opp.category} | ${TEMPLATE_MAP[opp.recommended_template] || opp.recommended_template}`);
-  lines.push('');
+const COMPETITION_MAP: Record<string, string> = {
+  low: '低',
+  medium: '中',
+  high: '高',
+  easy: '低',
+  moderate: '中',
+  hard: '高',
+  unknown: '未知',
+};
 
-  // Description
-  const descZh = opp.description_zh || opp.description || '';
-  lines.push(`> ${descZh}`);
-  lines.push('');
+function scoreClass(score: number): string {
+  if (score >= 70) return 'score-high';
+  if (score >= 50) return 'score-mid';
+  return 'score-low';
+}
 
-  // Score breakdown bar
-  const dims = [
-    { label: '开发速度', value: breakdown.development_speed },
-    { label: '变现', value: breakdown.monetization },
-    { label: 'SEO', value: breakdown.seo_potential },
-    { label: '时效性', value: breakdown.time_sensitivity },
-    { label: '长尾', value: breakdown.longtail_value },
-    { label: '新颖度', value: breakdown.novelty },
-  ];
-  const dimStr = dims
-    .filter(d => d.value != null)
-    .map(d => `${d.label}: ${d.value}`)
-    .join(' | ');
-  lines.push(`📊 ${dimStr}`);
-
-  // Source & traction
-  const sigs = (opp as any)._signals || [];
-  if (sigs.length > 0) {
-    const sig = sigs[0];
-    const traction = [];
-    if (sig.stars) traction.push(`${sig.stars} 赞`);
-    if (sig.comments_count) traction.push(`${sig.comments_count} 评论`);
-    lines.push(`📡 来源: ${sig.source} — ${traction.join(', ')}`);
-    lines.push(`🔗 ${sig.source_url}`);
-  }
-
-  // Window
-  const windowLabel = WINDOW_STATUS_MAP[opp.window_status] || opp.window_status;
-  let windowDetail = `⏰ 窗口期: ${windowLabel}`;
-  if (opp.window_closes_at) {
-    const daysLeft = Math.ceil((new Date(opp.window_closes_at).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-    if (daysLeft > 0) windowDetail += ` (剩余约 ${daysLeft} 天)`;
-  }
-  lines.push(windowDetail);
-
-  // Keyword & effort
-  lines.push(`🔑 关键词: \`${opp.target_keyword}\` | 预估工作量: ${opp.estimated_effort || '未知'}`);
-
-  // Competitors
-  const competitors = opp.competitors || [];
-  if (competitors.length > 0) {
-    const compStr = competitors.map((c: any) => c.name || c).join(', ');
-    lines.push(`⚔️ 竞品: ${compStr}`);
-  } else {
-    lines.push(`⚔️ 竞品: 暂无直接竞品`);
-  }
-
-  // Recommended features
-  const features = opp.recommended_features_zh || opp.recommended_features || [];
-  if (features.length > 0) {
-    lines.push(`💡 建议功能: ${features.join('、')}`);
-  }
-
-  lines.push('');
-  return lines;
+function scoreSegment(value: number): string {
+  if (value >= 70) return 'seg-green';
+  if (value >= 40) return 'seg-yellow';
+  if (value > 0) return 'seg-red';
+  return 'seg-gray';
 }
 
 /**
- * Format complete report
+ * Generate executive summary — the most important part of the report
  */
-function formatReport(data: DailyReportData): string[] {
-  // Return array of message chunks (Discord 2000 char limit)
-  const messages: string[] = [];
+function generateExecutiveSummary(data: DailyReportData): { verdict: string; reasoning: string } {
+  const opps = data.opportunities.topScoring;
+  const derivs = data.derivatives.topScoring.filter((d: any) => d.status === 'validated');
 
-  // Header message
-  const header: string[] = [];
-  header.push(`# 每日报告 — ${data.date}`);
-  header.push('');
-  header.push(`今日采集 **${data.signals.total}** 条信号，发现 **${data.opportunities.total}** 个机会，派生 **${data.derivatives.total}** 个产品创意`);
-  const sourceStr = Object.entries(data.signals.bySource)
-    .map(([source, count]) => `${source}: ${count}`)
-    .join(' | ');
-  header.push(`来源: ${sourceStr}`);
-  header.push('');
-  messages.push(header.join('\n'));
-
-  // Each opportunity as a separate message
-  if (data.opportunities.topScoring.length > 0) {
-    for (let i = 0; i < data.opportunities.topScoring.length; i++) {
-      const opp = data.opportunities.topScoring[i];
-      const card = formatOpportunityCard(opp, i + 1);
-      messages.push(card.join('\n'));
-    }
-  } else {
-    messages.push('今日无新机会');
+  if (opps.length === 0 && derivs.length === 0) {
+    return {
+      verdict: '今日无高价值机会，建议维持现有产品运营。',
+      reasoning: `采集了 ${data.signals.total} 条信号，但没有发现符合商业可行性标准的新机会。`,
+    };
   }
 
-  // Derivatives section
-  if (data.derivatives.topScoring.length > 0) {
-    const derivMsg: string[] = [];
-    derivMsg.push(`## 派生产品创意 (${data.derivatives.total})`);
-    derivMsg.push('');
-    for (const d of data.derivatives.topScoring) {
-      const score = typeof d.score === 'number' ? d.score.toFixed(0) : '?';
-      const keywords = (d.target_keywords || []).join(', ');
-      const monetization = (d.monetization_strategy || []).join(', ');
-      derivMsg.push(`**[${d.derivative_type}] ${d.title}** (${score}分)`);
-      derivMsg.push(`  来源: ${d.parent_topic}`);
-      derivMsg.push(`  关键词: ${keywords}`);
-      derivMsg.push(`  变现: ${monetization} | 工作量: ${d.build_effort} | 竞争: ${d.competition_level}`);
-      derivMsg.push('');
+  // Find the best actionable item
+  const bestOpp = opps[0];
+  const bestDeriv = derivs[0];
+
+  let verdict = '';
+  let reasoning = '';
+
+  if (bestOpp && bestOpp.score >= 70) {
+    const effort = EFFORT_MAP[bestOpp.estimated_effort] || bestOpp.estimated_effort;
+    const bv = bestOpp.score_breakdown?.business_viability;
+    verdict = `今日最佳机会：${bestOpp.description_zh?.split('，')[0] || bestOpp.title}`;
+    reasoning = `综合评分 ${bestOpp.score.toFixed(0)} 分` +
+      (bv ? `，商业可行性 ${bv} 分` : '') +
+      `，预估投入 ${effort}` +
+      `，关键词「${bestOpp.target_keyword}」。` +
+      (data.derivatives.validated > 0 ? `另有 ${data.derivatives.validated} 个衍生产品通过验证。` : '');
+  } else if (bestDeriv) {
+    verdict = `今日无突破性机会，但有 ${derivs.length} 个衍生产品值得关注。`;
+    reasoning = `最佳衍生品：${bestDeriv.title}（${bestDeriv.score?.toFixed(0)} 分），竞争度${COMPETITION_MAP[bestDeriv.competition_level] || '未知'}。`;
+  } else {
+    verdict = `发现 ${opps.length} 个潜在机会，但均未达到立即执行标准。`;
+    reasoning = `最高分 ${bestOpp?.score?.toFixed(0) || '?'} 分，建议观察趋势变化。`;
+  }
+
+  return { verdict, reasoning };
+}
+
+/**
+ * Format the full report as styled HTML (for GitHub Pages)
+ */
+function formatFullHtml(data: DailyReportData): string {
+  const lines: string[] = [];
+  const summary = generateExecutiveSummary(data);
+
+  // YAML front matter
+  lines.push('---');
+  lines.push('layout: default');
+  lines.push(`title: "每日洞察 - ${data.date}"`);
+  lines.push('---');
+  lines.push('');
+
+  // Back link
+  lines.push('<a href="../" class="back-link">← 返回首页</a>');
+  lines.push('');
+
+  // Header
+  lines.push('<div class="report-header">');
+  lines.push(`  <h1>每日洞察</h1>`);
+  lines.push(`  <div class="date">${data.date}</div>`);
+  lines.push('</div>');
+  lines.push('');
+
+  // Executive Summary
+  lines.push('<div class="executive-summary">');
+  lines.push(`  <p class="verdict">${summary.verdict}</p>`);
+  lines.push(`  <p class="reasoning">${summary.reasoning}</p>`);
+  lines.push('</div>');
+  lines.push('');
+
+  // Stats Row
+  lines.push('<div class="stats-row">');
+  lines.push('  <div class="stat-card">');
+  lines.push(`    <div class="number">${data.signals.total}</div>`);
+  lines.push('    <div class="label">信号采集</div>');
+  lines.push('  </div>');
+  lines.push('  <div class="stat-card">');
+  lines.push(`    <div class="number">${data.opportunities.total}</div>`);
+  lines.push('    <div class="label">机会发现</div>');
+  lines.push('  </div>');
+  lines.push('  <div class="stat-card">');
+  lines.push(`    <div class="number">${data.derivatives.validated}</div>`);
+  lines.push('    <div class="label">产品验证通过</div>');
+  lines.push('  </div>');
+  lines.push('  <div class="stat-card">');
+  lines.push(`    <div class="number">$${data.cost.total.toFixed(2)}</div>`);
+  lines.push('    <div class="label">今日成本</div>');
+  lines.push('  </div>');
+  lines.push('</div>');
+  lines.push('');
+
+  // Funnel
+  const maxBar = data.signals.total || 1;
+  const oppPct = Math.max(5, Math.round((data.opportunities.total / maxBar) * 100));
+  const derivPct = Math.max(5, Math.round((data.derivatives.total / maxBar) * 100));
+  const validPct = Math.max(5, Math.round((data.derivatives.validated / maxBar) * 100));
+
+  lines.push('<div class="funnel">');
+  lines.push('  <h2>Pipeline 转化漏斗</h2>');
+  lines.push(`  <div class="funnel-bar"><span class="funnel-label">信号</span><div class="bar bar-signals" style="width:100%">${data.signals.total}</div></div>`);
+  lines.push(`  <div class="funnel-bar"><span class="funnel-label">机会</span><div class="bar bar-opportunities" style="width:${oppPct}%">${data.opportunities.total}</div></div>`);
+  lines.push(`  <div class="funnel-bar"><span class="funnel-label">衍生品</span><div class="bar bar-derivatives" style="width:${derivPct}%">${data.derivatives.total}</div></div>`);
+  lines.push(`  <div class="funnel-bar"><span class="funnel-label">已验证</span><div class="bar bar-validated" style="width:${validPct}%">${data.derivatives.validated}</div></div>`);
+  lines.push('</div>');
+  lines.push('');
+
+  // Opportunity Cards
+  if (data.opportunities.topScoring.length > 0) {
+    lines.push(`<h2 style="font-size:1.1em;color:var(--color-gray-700);margin:24px 0 12px;">重点机会</h2>`);
+    lines.push('');
+
+    for (const opp of data.opportunities.topScoring) {
+      const score = typeof opp.score === 'number' ? opp.score : 0;
+      const bd = opp.score_breakdown || {};
+      const desc = opp.description_zh || opp.description || '';
+      const template = TEMPLATE_MAP[opp.recommended_template] || opp.recommended_template || '';
+      const effort = EFFORT_MAP[opp.estimated_effort] || opp.estimated_effort || '';
+      const windowDays = opp.window_closes_at
+        ? Math.max(0, Math.ceil((new Date(opp.window_closes_at).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+        : 0;
+
+      lines.push('<div class="opp-card">');
+
+      // Header with title and score
+      lines.push('  <div class="card-header">');
+      lines.push(`    <h3 class="card-title">${opp.title}</h3>`);
+      lines.push(`    <span class="card-score ${scoreClass(score)}">${score.toFixed(0)}</span>`);
+      lines.push('  </div>');
+
+      lines.push('  <div class="card-body">');
+
+      // Score bar
+      const dims = ['development_speed', 'monetization', 'seo_potential', 'business_viability', 'time_sensitivity', 'longtail_value', 'novelty'];
+      lines.push('    <div class="score-bar-row">');
+      for (const dim of dims) {
+        const val = bd[dim] || 0;
+        lines.push(`      <div class="score-segment ${scoreSegment(val)}" title="${dim}: ${val}"></div>`);
+      }
+      lines.push('    </div>');
+
+      // Description
+      lines.push(`    <p class="card-desc">${desc}</p>`);
+
+      // Tags
+      lines.push('    <div class="tags">');
+      lines.push(`      <span class="tag tag-keyword">${opp.target_keyword}</span>`);
+      if (template) lines.push(`      <span class="tag tag-form">${template}</span>`);
+      if (effort) lines.push(`      <span class="tag tag-effort">投入 ${effort}</span>`);
+      if (windowDays > 0) lines.push(`      <span class="tag tag-window">窗口 ${windowDays} 天</span>`);
+      const strategies = (opp.monetization_strategy || []).slice(0, 2);
+      for (const s of strategies) {
+        lines.push(`      <span class="tag tag-monetization">${s}</span>`);
+      }
+      lines.push('    </div>');
+
+      // Meta: key scores
+      const dimLabels: Record<string, string> = {
+        development_speed: '开发速度',
+        monetization: '变现',
+        seo_potential: 'SEO',
+        business_viability: '商业可行性',
+        time_sensitivity: '时效性',
+        longtail_value: '长尾价值',
+        novelty: '新颖度',
+      };
+      const metaParts = dims.map(d => `<span><strong>${dimLabels[d]}</strong> ${bd[d] || 0}</span>`).join(' ');
+      lines.push(`    <div class="card-meta">${metaParts}</div>`);
+
+      lines.push('  </div>');
+      lines.push('</div>');
+      lines.push('');
     }
-    messages.push(derivMsg.join('\n'));
+  }
+
+  // Derivatives — collapsible
+  if (data.derivatives.topScoring.length > 0) {
+    lines.push('<details>');
+    lines.push(`  <summary>衍生产品候选（${data.derivatives.total} 个，${data.derivatives.validated} 个通过验证）</summary>`);
+    lines.push('  <div class="details-body">');
+    lines.push('    <table class="deriv-table">');
+    lines.push('      <thead><tr><th>类型</th><th>产品名称</th><th>评分</th><th>竞争</th><th>工作量</th></tr></thead>');
+    lines.push('      <tbody>');
+    for (const d of data.derivatives.topScoring) {
+      const dScore = typeof d.score === 'number' ? d.score.toFixed(0) : '?';
+      const dType = DERIV_TYPE_MAP[d.derivative_type] || d.derivative_type;
+      const comp = COMPETITION_MAP[d.competition_level] || '未知';
+      const eff = EFFORT_MAP[d.build_effort] || d.build_effort || '';
+      const status = d.status === 'validated' ? ' ✓' : d.status === 'rejected' ? ' ✗' : '';
+      lines.push(`        <tr><td>${dType}</td><td>${d.title}${status}</td><td class="${scoreClass(d.score || 0)}">${dScore}</td><td>${comp}</td><td>${eff}</td></tr>`);
+    }
+    lines.push('      </tbody>');
+    lines.push('    </table>');
+    lines.push('  </div>');
+    lines.push('</details>');
+    lines.push('');
+  }
+
+  // Signal sources — collapsible
+  const sourceEntries = Object.entries(data.signals.bySource);
+  if (sourceEntries.length > 0) {
+    lines.push('<details>');
+    lines.push('  <summary>信号来源明细</summary>');
+    lines.push('  <div class="details-body">');
+    lines.push('    <table class="deriv-table">');
+    lines.push('      <thead><tr><th>来源</th><th>数量</th></tr></thead>');
+    lines.push('      <tbody>');
+    for (const [source, count] of sourceEntries) {
+      lines.push(`        <tr><td>${SOURCE_MAP[source] || source}</td><td>${count}</td></tr>`);
+    }
+    lines.push('      </tbody>');
+    lines.push('    </table>');
+    lines.push('  </div>');
+    lines.push('</details>');
+    lines.push('');
   }
 
   // Cost footer
-  const footer: string[] = [];
-  footer.push(`---`);
-  footer.push(`💰 **成本**: $${data.cost.total.toFixed(4)} (${data.cost.apiCalls} 次调用)`);
   const agentCosts = Object.entries(data.cost.byAgent)
-    .map(([agent, cost]) => `${agent}: $${cost.toFixed(4)}`)
-    .join(' | ');
-  if (agentCosts) footer.push(agentCosts);
-  messages.push(footer.join('\n'));
-
-  return messages;
-}
-
-/**
- * Format the full report as a single Markdown document (for GitHub Pages)
- */
-function formatFullMarkdown(data: DailyReportData): string {
-  const lines: string[] = [];
-
-  // YAML front matter for Jekyll
-  lines.push('---');
-  lines.push(`layout: default`);
-  lines.push(`title: "Daily Report - ${data.date}"`);
-  lines.push('---');
-  lines.push('');
-
-  lines.push(`# Daily Report — ${data.date}`);
-  lines.push('');
-  lines.push(`[← Back to Index](../)`);
-  lines.push('');
-
-  // Summary
-  lines.push(`## Summary`);
-  lines.push('');
-  lines.push(`| Metric | Value |`);
-  lines.push(`|--------|-------|`);
-  lines.push(`| Signals Collected | ${data.signals.total} |`);
-  lines.push(`| Opportunities Found | ${data.opportunities.total} |`);
-  lines.push(`| Derivatives Created | ${data.derivatives.total} |`);
-  lines.push(`| LLM Cost | $${data.cost.total.toFixed(4)} |`);
-  lines.push(`| API Calls | ${data.cost.apiCalls} |`);
-  lines.push('');
-
-  // Sources breakdown
-  const sourceEntries = Object.entries(data.signals.bySource);
-  if (sourceEntries.length > 0) {
-    lines.push(`### Signal Sources`);
-    lines.push('');
-    lines.push(`| Source | Count |`);
-    lines.push(`|--------|-------|`);
-    for (const [source, count] of sourceEntries) {
-      lines.push(`| ${source} | ${count} |`);
-    }
-    lines.push('');
-  }
-
-  // Opportunities
-  if (data.opportunities.topScoring.length > 0) {
-    lines.push(`## Top Opportunities`);
-    lines.push('');
-    for (let i = 0; i < data.opportunities.topScoring.length; i++) {
-      const opp = data.opportunities.topScoring[i];
-      const card = formatOpportunityCard(opp, i + 1);
-      lines.push(...card);
-    }
-  }
-
-  // Derivatives
-  if (data.derivatives.topScoring.length > 0) {
-    lines.push(`## Derivative Product Ideas (${data.derivatives.total})`);
-    lines.push('');
-    lines.push(`| Type | Title | Score | Keywords | Monetization | Effort | Competition |`);
-    lines.push(`|------|-------|-------|----------|-------------|--------|-------------|`);
-    for (const d of data.derivatives.topScoring) {
-      const score = typeof d.score === 'number' ? d.score.toFixed(0) : '?';
-      const keywords = (d.target_keywords || []).slice(0, 3).join(', ');
-      const monetization = (d.monetization_strategy || []).join(', ');
-      lines.push(`| ${d.derivative_type} | ${d.title} | ${score} | ${keywords} | ${monetization} | ${d.build_effort} | ${d.competition_level || '-'} |`);
-    }
-    lines.push('');
-
-    // Detailed derivative cards
-    for (const d of data.derivatives.topScoring) {
-      const score = typeof d.score === 'number' ? d.score.toFixed(0) : '?';
-      lines.push(`### [${d.derivative_type}] ${d.title} (${score})`);
-      lines.push('');
-      lines.push(`- **Parent Topic**: ${d.parent_topic}`);
-      lines.push(`- **Keywords**: ${(d.target_keywords || []).join(', ')}`);
-      lines.push(`- **Product Form**: ${d.product_form}`);
-      lines.push(`- **Monetization**: ${(d.monetization_strategy || []).join(', ')}`);
-      lines.push(`- **Build Effort**: ${d.build_effort}`);
-      lines.push(`- **Competition**: ${d.competition_level || 'unknown'}`);
-      lines.push(`- **Status**: ${d.status}`);
-      lines.push('');
-    }
-  }
-
-  // Cost breakdown
-  lines.push(`## Cost Breakdown`);
-  lines.push('');
-  lines.push(`| Agent | Cost |`);
-  lines.push(`|-------|------|`);
-  for (const [agent, cost] of Object.entries(data.cost.byAgent)) {
-    lines.push(`| ${agent} | $${cost.toFixed(4)} |`);
-  }
-  lines.push(`| **Total** | **$${data.cost.total.toFixed(4)}** |`);
-  lines.push('');
+    .map(([agent, cost]) => `${agent}: $${cost.toFixed(2)}`)
+    .join(' · ');
+  lines.push('<div class="cost-footer">');
+  lines.push(`  <span>成本：<strong>$${data.cost.total.toFixed(2)}</strong>（${data.cost.apiCalls} 次 API 调用）</span>`);
+  if (agentCosts) lines.push(`  <span>${agentCosts}</span>`);
+  lines.push('</div>');
 
   return lines.join('\n');
 }
 
 /**
- * Save report as Markdown file to docs/reports/
+ * Save report as HTML-Markdown file to docs/reports/
  */
-function saveMarkdownReport(data: DailyReportData, markdown: string): string | null {
+function saveReport(data: DailyReportData, content: string): string | null {
   try {
     const docsDir = path.resolve(__dirname, '../../docs/reports');
     if (!fs.existsSync(docsDir)) {
       fs.mkdirSync(docsDir, { recursive: true });
     }
-
     const filename = `${data.date}.md`;
     const filepath = path.join(docsDir, filename);
-    fs.writeFileSync(filepath, markdown, 'utf-8');
-    console.log(`[Report] Saved markdown: ${filepath}`);
+    fs.writeFileSync(filepath, content, 'utf-8');
+    console.log(`[Report] 已保存: ${filepath}`);
     return filepath;
   } catch (error) {
-    console.error('[Report] Failed to save markdown:', error);
+    console.error('[Report] 保存失败:', error);
     return null;
   }
 }
@@ -376,11 +412,11 @@ function updateReportIndex(data: DailyReportData): void {
 
     let content = fs.readFileSync(indexPath, 'utf-8');
 
-    const reportLink = `- [${data.date}](reports/${data.date}) — ${data.signals.total} signals, ${data.opportunities.total} opportunities, ${data.derivatives.total} derivatives, $${data.cost.total.toFixed(4)}`;
+    const validated = data.derivatives.validated;
+    const reportLink = `- [${data.date}](reports/${data.date}) — ${data.signals.total} 条信号, ${data.opportunities.total} 个机会, ${validated} 个已验证, $${data.cost.total.toFixed(2)}`;
 
     const startMarker = '<!-- REPORT_INDEX_START -->';
     const endMarker = '<!-- REPORT_INDEX_END -->';
-
     const startIdx = content.indexOf(startMarker);
     const endIdx = content.indexOf(endMarker);
 
@@ -389,68 +425,57 @@ function updateReportIndex(data: DailyReportData): void {
       const existingContent = content.substring(startIdx + startMarker.length, endIdx).trim();
       const after = content.substring(endIdx);
 
-      // Remove placeholder text if it's the first report
       const existingLines = existingContent
         .split('\n')
-        .filter(line => line.trim() && !line.includes('No reports yet'));
-
-      // Add new report at the top (most recent first)
+        .filter(line => line.trim() && !line.includes('No reports yet') && !line.includes(`reports/${data.date})`));
       existingLines.unshift(reportLink);
 
       content = before + '\n' + existingLines.join('\n') + '\n' + after;
       fs.writeFileSync(indexPath, content, 'utf-8');
-      console.log('[Report] Updated index.md');
+      console.log('[Report] 已更新 index.md');
     }
   } catch (error) {
-    console.error('[Report] Failed to update index:', error);
+    console.error('[Report] 更新索引失败:', error);
   }
 }
 
 /**
- * Send report to Discord webhook (summary + GitHub Pages link)
+ * Send compact summary to Discord (Chinese, max 10 lines)
  */
 async function sendToDiscord(data: DailyReportData): Promise<boolean> {
   if (!config.discord.webhookUrl) {
-    console.log('[Report] No Discord webhook configured, skipping');
+    console.log('[Report] 未配置 Discord webhook，跳过');
     return false;
   }
 
   try {
-    // Build a compact summary for Discord
-    const summary: string[] = [];
-    summary.push(`# Daily Report — ${data.date}`);
-    summary.push('');
-    summary.push(`Signals: **${data.signals.total}** | Opportunities: **${data.opportunities.total}** | Derivatives: **${data.derivatives.total}** | Cost: **$${data.cost.total.toFixed(4)}**`);
+    const summary = generateExecutiveSummary(data);
+    const lines: string[] = [];
 
-    // Top 3 opportunities (compact)
-    if (data.opportunities.topScoring.length > 0) {
-      summary.push('');
-      summary.push('**Top Opportunities:**');
-      for (let i = 0; i < Math.min(3, data.opportunities.topScoring.length); i++) {
-        const opp = data.opportunities.topScoring[i];
-        const score = typeof opp.score === 'number' ? opp.score.toFixed(0) : '?';
-        summary.push(`${i + 1}. **${opp.title}** (${score}) — \`${opp.target_keyword}\``);
-      }
-    }
+    lines.push(`📊 **每日洞察 — ${data.date}**`);
+    lines.push('');
+    lines.push(`> ${summary.verdict}`);
+    lines.push('');
+    lines.push(`信号 **${data.signals.total}** → 机会 **${data.opportunities.total}** → 验证通过 **${data.derivatives.validated}** · 成本 $${data.cost.total.toFixed(2)}`);
 
-    // Top 3 derivatives (compact)
-    if (data.derivatives.topScoring.length > 0) {
-      summary.push('');
-      summary.push('**Top Derivatives:**');
-      for (let i = 0; i < Math.min(3, data.derivatives.topScoring.length); i++) {
-        const d = data.derivatives.topScoring[i];
-        const score = typeof d.score === 'number' ? d.score.toFixed(0) : '?';
-        summary.push(`${i + 1}. [${d.derivative_type}] **${d.title}** (${score})`);
+    // Top 2 opportunities (only if valuable)
+    const goodOpps = data.opportunities.topScoring.filter((o: any) => o.score >= 60);
+    if (goodOpps.length > 0) {
+      lines.push('');
+      for (let i = 0; i < Math.min(2, goodOpps.length); i++) {
+        const opp = goodOpps[i];
+        const effort = EFFORT_MAP[opp.estimated_effort] || opp.estimated_effort;
+        lines.push(`${i + 1}. **${opp.title}** (${opp.score.toFixed(0)}分) — \`${opp.target_keyword}\` · ${effort}`);
       }
     }
 
     // GitHub Pages link
     if (config.githubPages.baseUrl) {
-      summary.push('');
-      summary.push(`Full report: ${config.githubPages.baseUrl}/reports/${data.date}`);
+      lines.push('');
+      lines.push(`完整报告 → ${config.githubPages.baseUrl}/reports/${data.date}`);
     }
 
-    const content = summary.join('\n');
+    const content = lines.join('\n');
 
     const response = await fetch(config.discord.webhookUrl, {
       method: 'POST',
@@ -459,14 +484,14 @@ async function sendToDiscord(data: DailyReportData): Promise<boolean> {
     });
 
     if (!response.ok) {
-      console.error(`[Report] Discord send failed: ${response.status}`);
+      console.error(`[Report] Discord 发送失败: ${response.status}`);
       return false;
     }
 
-    console.log('[Report] Sent summary to Discord');
+    console.log('[Report] 已推送至 Discord');
     return true;
   } catch (error) {
-    console.error('[Report] Discord error:', error);
+    console.error('[Report] Discord 错误:', error);
     return false;
   }
 }
@@ -474,7 +499,7 @@ async function sendToDiscord(data: DailyReportData): Promise<boolean> {
 /**
  * Save report to database
  */
-async function saveReport(data: DailyReportData): Promise<void> {
+async function saveReportToDb(data: DailyReportData): Promise<void> {
   await supabaseAdmin.from('daily_reports').upsert({
     report_date: data.date,
     signals_collected: data.signals.total,
@@ -487,6 +512,8 @@ async function saveReport(data: DailyReportData): Promise<void> {
       signals_by_source: data.signals.bySource,
       cost_by_agent: data.cost.byAgent,
       top_derivatives: data.derivatives.topScoring,
+      derivatives_validated: data.derivatives.validated,
+      derivatives_rejected: data.derivatives.rejected,
     },
   }, { onConflict: 'report_date' });
 }
@@ -495,26 +522,26 @@ async function saveReport(data: DailyReportData): Promise<void> {
  * Generate and send daily report
  */
 export async function generateDailyReport(): Promise<void> {
-  console.log('[Report] === Generating Daily Report ===');
+  console.log('[Report] === 生成每日报告 ===');
 
   const data = await gatherReportData();
 
-  // Generate full markdown for GitHub Pages
-  const markdown = formatFullMarkdown(data);
-  saveMarkdownReport(data, markdown);
+  // Generate styled HTML report for GitHub Pages
+  const html = formatFullHtml(data);
+  saveReport(data, html);
   updateReportIndex(data);
 
-  // Log summary to console
-  const messages = formatReport(data);
-  for (const msg of messages) {
-    console.log(msg);
-  }
+  // Log summary
+  const summary = generateExecutiveSummary(data);
+  console.log(`[Report] ${summary.verdict}`);
+  console.log(`[Report] ${summary.reasoning}`);
+  console.log(`[Report] 信号: ${data.signals.total} | 机会: ${data.opportunities.total} | 验证通过: ${data.derivatives.validated} | 成本: $${data.cost.total.toFixed(2)}`);
 
   // Save to database
-  await saveReport(data);
+  await saveReportToDb(data);
 
-  // Send compact summary to Discord (with link to full report)
+  // Send compact summary to Discord
   await sendToDiscord(data);
 
-  console.log('[Report] === Report Complete ===');
+  console.log('[Report] === 报告完成 ===');
 }

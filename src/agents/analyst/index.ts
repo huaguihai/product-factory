@@ -22,6 +22,7 @@ interface OpportunityAssessment {
     development_speed: number;
     monetization: number;
     seo_potential: number;
+    business_viability: number;
     time_sensitivity: number;
     longtail_value: number;
     novelty: number;
@@ -38,10 +39,11 @@ interface OpportunityAssessment {
 }
 
 const SCORE_WEIGHTS: Record<string, number> = {
-  development_speed: 0.20,
-  monetization: 0.20,
-  seo_potential: 0.20,
-  time_sensitivity: 0.15,
+  development_speed: 0.15,
+  monetization: 0.15,
+  seo_potential: 0.15,
+  business_viability: 0.20,
+  time_sensitivity: 0.10,
   longtail_value: 0.15,
   novelty: 0.10,
 };
@@ -59,17 +61,114 @@ Your evaluation criteria (each scored 0-100):
 1. **Development Speed (0-100)**: Can we build this in < 1 day using a template? Higher = faster to build. Tutorial sites and comparison pages score high; complex interactive tools score low.
 2. **Monetization (0-100)**: AdSense CPC estimate for this niche, affiliate program availability, traffic ceiling, user dwell time. High CPC niches (finance, SaaS tools) score higher.
 3. **SEO Potential (0-100)**: Keyword search volume estimate, competition level from existing sites, long-tail keyword opportunities, SERP feature opportunities (featured snippets, People Also Ask).
-4. **Time Sensitivity (0-100)**: How urgent is the window? Will big players and content farms cover this soon? Higher = more urgent, must act now.
-5. **Long-tail Value (0-100)**: Will people still search for this in 3-6 months? Evergreen topics score high; one-week viral spikes score low.
-6. **Novelty (0-100)**: How new is this? How few competitors exist? Higher = less competition, more room for a new site.
+4. **Business Viability (0-100)**: THIS IS CRITICAL. Score based on:
+   - Can we create UNIQUE VALUE that doesn't already exist? If official docs/help center already answers the user's question, score LOW (< 30).
+   - What does the user DO AFTER reading? If they just get an answer and leave (e.g. "how to verify my account"), score LOW. If they need ongoing tools, comparisons, or resources, score HIGH.
+   - Content MOAT: Can we build something meaningfully better than what 100 copycat sites would produce? Thin step-by-step tutorials have NO moat (score < 20). Data-driven comparisons, curated directories, and interactive tools have HIGH moat.
+   - Is the user intent TRANSACTIONAL (willing to click ads/buy something) or purely INFORMATIONAL (just wants a quick answer)? Transactional = HIGH, Informational = LOW.
+   - Examples of LOW viability: platform policy changes (users just want to know what changed), account verification steps (official help center suffices), celebrity gossip (no product angle).
+   - Examples of HIGH viability: "best alternatives to X" (comparison intent, affiliate potential), "how to block ads in X" (tool/extension intent), "X vs Y for Z use case" (purchase decision).
+5. **Time Sensitivity (0-100)**: How urgent is the window? Will big players and content farms cover this soon? Higher = more urgent, must act now.
+6. **Long-tail Value (0-100)**: Will people still search for this in 3-6 months? Evergreen topics score high; one-week viral spikes score low.
+7. **Novelty (0-100)**: How new is this? How few competitors exist? Higher = less competition, more room for a new site.
 
 Key principles:
 - Score > 70 is worth building immediately
 - Score 55-70 is worth deriving specific product ideas from
+- If business_viability < 30, the overall opportunity should be REJECTED regardless of other scores
 - Prioritize topics where a focused, well-built page can rank on page 1
 - Consider DERIVATIVE opportunities: tutorials, comparisons, directories, prompt guides, cheatsheets
 - Think about monetization concretely: which affiliate programs, what AdSense CPC range
-- "New + searchable + buildable in 1 day" is the sweet spot`;
+- "New + searchable + buildable in 1 day + clear monetization path" is the sweet spot
+- NEVER recommend opportunities where the only content we can create is restating official documentation`;
+
+/**
+ * Extract core topic words from a string for similarity comparison
+ */
+function extractTopicWords(text: string): Set<string> {
+  const STOP_WORDS = new Set([
+    'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+    'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+    'should', 'may', 'might', 'can', 'shall', 'to', 'of', 'in', 'for',
+    'on', 'with', 'at', 'by', 'from', 'as', 'into', 'about', 'through',
+    'how', 'what', 'which', 'who', 'when', 'where', 'why', 'all', 'each',
+    'every', 'both', 'few', 'more', 'most', 'other', 'some', 'such', 'no',
+    'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very', 'just',
+    'and', 'but', 'or', 'nor', 'if', 'then', 'else', 'this', 'that',
+    'these', 'those', 'it', 'its', 'your', 'our', 'my', 'his', 'her',
+    'step', 'by', 'guide', 'tutorial', 'complete', 'full', 'new', 'best',
+    'top', 'tips', 'tricks', 'ultimate', '2024', '2025', '2026',
+  ]);
+  return new Set(
+    text.toLowerCase()
+      .replace(/[^a-z0-9\s\u4e00-\u9fff]/g, ' ')
+      .split(/\s+/)
+      .filter(w => w.length > 2 && !STOP_WORDS.has(w))
+  );
+}
+
+/**
+ * Calculate Jaccard similarity between two sets of words
+ */
+function topicSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const word of a) {
+    if (b.has(word)) intersection++;
+  }
+  const union = new Set([...a, ...b]).size;
+  return union > 0 ? intersection / union : 0;
+}
+
+/**
+ * Group signals by topic — signals about the same topic are merged
+ */
+function groupSignalsByTopic(signals: any[]): any[][] {
+  const groups: any[][] = [];
+  const assigned = new Set<number>();
+
+  for (let i = 0; i < signals.length; i++) {
+    if (assigned.has(i)) continue;
+    const group = [signals[i]];
+    assigned.add(i);
+    const wordsI = extractTopicWords(signals[i].title + ' ' + (signals[i].description || ''));
+
+    for (let j = i + 1; j < signals.length; j++) {
+      if (assigned.has(j)) continue;
+      const wordsJ = extractTopicWords(signals[j].title + ' ' + (signals[j].description || ''));
+      const sim = topicSimilarity(wordsI, wordsJ);
+      // Also check URL-based match
+      const urlI = (signals[i].source_url || '').split('?')[0].replace(/\/+$/, '').toLowerCase();
+      const urlJ = (signals[j].source_url || '').split('?')[0].replace(/\/+$/, '').toLowerCase();
+      const sameUrl = urlI && urlJ && urlI === urlJ;
+
+      if (sim >= 0.4 || sameUrl) {
+        group.push(signals[j]);
+        assigned.add(j);
+      }
+    }
+    groups.push(group);
+  }
+  return groups;
+}
+
+/**
+ * Merge a group of signals into one representative signal with combined context
+ */
+function mergeSignalGroup(group: any[]): any {
+  // Pick the signal with most traction as representative
+  group.sort((a: any, b: any) => ((b.stars || 0) + (b.comments_count || 0)) - ((a.stars || 0) + (a.comments_count || 0)));
+  const primary = { ...group[0] };
+
+  if (group.length > 1) {
+    // Combine descriptions and source info
+    const otherSources = group.slice(1).map((s: any) => `${s.source}: ${s.title}`).join('; ');
+    primary.description = (primary.description || '') + `\nAlso reported by: ${otherSources}`;
+    primary._merged_ids = group.map((s: any) => s.id);
+    primary._merged_count = group.length;
+  }
+  return primary;
+}
 
 /**
  * Evaluate a single analyzed signal
@@ -104,6 +203,7 @@ Respond with JSON:
     "development_speed": 0-100,
     "monetization": 0-100,
     "seo_potential": 0-100,
+    "business_viability": 0-100,
     "time_sensitivity": 0-100,
     "longtail_value": 0-100,
     "novelty": 0-100
@@ -152,42 +252,45 @@ export async function runAnalyst(): Promise<{ evaluated: number; opportunities: 
     return { evaluated: 0, opportunities: 0 };
   }
 
-  // Deduplicate signals by source_url — keep the one with highest traction
-  const urlMap = new Map<string, any>();
-  for (const sig of rawSignals) {
-    // Normalize URL: strip trailing slashes, query params for comparison
-    const rawUrl = sig.source_url || '';
-    const normalizedUrl = rawUrl.split('?')[0].replace(/\/+$/, '').toLowerCase();
-    const key = normalizedUrl || sig.title.toLowerCase().slice(0, 60);
+  // Group signals by topic (not just URL) to prevent duplicates
+  const groups = groupSignalsByTopic(rawSignals);
+  console.log(`[Analyst] ${rawSignals.length} signals grouped into ${groups.length} topics`);
 
-    const existing = urlMap.get(key);
-    if (!existing || (sig.stars || 0) > (existing.stars || 0)) {
-      if (existing) {
-        // Mark the duplicate as evaluated so it's not re-processed
+  // Merge each group into one representative signal
+  const signals: any[] = [];
+  for (const group of groups) {
+    const merged = mergeSignalGroup(group);
+    signals.push(merged);
+    if (group.length > 1) {
+      console.log(`[Analyst] ⊟ Merged ${group.length} signals about: "${merged.title.slice(0, 50)}"`);
+      // Mark non-primary signals as dismissed
+      for (const s of group.slice(1)) {
         await supabaseAdmin.from('signals').update({
           status: 'dismissed',
-          raw_data: { ...existing.raw_data, dismiss_reason: 'Duplicate signal (merged)' },
-        }).eq('id', existing.id);
-        console.log(`[Analyst] ⊟ Merged duplicate signal: "${existing.title.slice(0, 50)}"`);
+          raw_data: { ...s.raw_data, dismiss_reason: `Merged with signal ${merged.id} (same topic)` },
+        }).eq('id', s.id);
       }
-      urlMap.set(key, sig);
-    } else {
-      // This signal is a duplicate with lower traction, dismiss it
-      await supabaseAdmin.from('signals').update({
-        status: 'dismissed',
-        raw_data: { ...sig.raw_data, dismiss_reason: 'Duplicate signal (merged)' },
-      }).eq('id', sig.id);
-      console.log(`[Analyst] ⊟ Merged duplicate signal: "${sig.title.slice(0, 50)}"`);
     }
   }
 
-  const signals = Array.from(urlMap.values()).slice(0, 10);
-  console.log(`[Analyst] Evaluating ${signals.length} signals (${rawSignals.length - signals.length} duplicates merged)...`);
+  // Load existing opportunities for semantic dedup
+  const { data: existingOpps } = await supabaseAdmin
+    .from('opportunities')
+    .select('id, slug, title, target_keyword')
+    .order('created_at', { ascending: false })
+    .limit(100);
+  const existingTopicSets = (existingOpps || []).map((opp: any) => ({
+    opp,
+    words: extractTopicWords(opp.title + ' ' + (opp.target_keyword || '')),
+  }));
+
+  const evalSignals = signals.slice(0, 10);
+  console.log(`[Analyst] Evaluating ${evalSignals.length} topics...`);
 
   let evaluated = 0;
   let opportunities = 0;
 
-  for (const signal of signals) {
+  for (const signal of evalSignals) {
     const { exceeded } = await isDailyBudgetExceeded();
     if (exceeded) {
       console.warn('[Analyst] Budget exceeded mid-run. Stopping.');
@@ -205,49 +308,36 @@ export async function runAnalyst(): Promise<{ evaluated: number; opportunities: 
     const score = calculateWeightedScore(assessment.score_breakdown);
     const slug = assessment.slug || slugify(assessment.title);
 
+    // Business viability gate: reject if too low regardless of total score
+    const bv = assessment.score_breakdown.business_viability || 0;
+    if (bv < 30) {
+      console.log(`[Analyst] ✗ REJECTED (low business viability: ${bv}): ${assessment.title}`);
+      // Mark signal as evaluated
+      await supabaseAdmin.from('signals').update({ status: 'evaluated' })
+        .eq('id', signal.id);
+      continue;
+    }
+
+    // Semantic dedup against existing opportunities
+    const newWords = extractTopicWords(assessment.title + ' ' + (assessment.target_keyword || ''));
+    const duplicateOf = existingTopicSets.find(e => topicSimilarity(newWords, e.words) >= 0.35);
+    if (duplicateOf) {
+      console.log(`[Analyst] ⊟ Topic already covered: "${duplicateOf.opp.title.slice(0, 50)}" ≈ "${assessment.title.slice(0, 50)}", skipping`);
+      await supabaseAdmin.from('signals').update({ status: 'evaluated' })
+        .eq('id', signal.id);
+      continue;
+    }
+
     // Check if opportunity with this slug already exists
     const { data: existingOpp } = await supabaseAdmin
       .from('opportunities')
-      .select('id, slug, target_keyword')
+      .select('id, slug')
       .eq('slug', slug)
       .maybeSingle();
 
     if (existingOpp) {
       console.log(`[Analyst] Opportunity already exists (slug): ${slug}`);
       continue;
-    }
-
-    // Check if opportunity with similar keyword already exists (prevent near-duplicates)
-    const keyword = assessment.target_keyword?.toLowerCase().trim() || '';
-    if (keyword) {
-      const { data: keywordMatch } = await supabaseAdmin
-        .from('opportunities')
-        .select('id, slug, target_keyword')
-        .ilike('target_keyword', `%${keyword}%`)
-        .limit(1)
-        .maybeSingle();
-
-      if (keywordMatch) {
-        console.log(`[Analyst] ⊟ Similar opportunity exists: "${keywordMatch.target_keyword}" ≈ "${keyword}", skipping`);
-        continue;
-      }
-
-      // Also check reverse: existing keyword contained in new keyword
-      const { data: reverseMatch } = await supabaseAdmin
-        .from('opportunities')
-        .select('id, slug, target_keyword')
-        .not('target_keyword', 'is', null)
-        .limit(50);
-
-      const hasSimilar = (reverseMatch || []).some((opp: any) => {
-        const existingKw = (opp.target_keyword || '').toLowerCase().trim();
-        return existingKw && (keyword.includes(existingKw) || existingKw.includes(keyword));
-      });
-
-      if (hasSimilar) {
-        console.log(`[Analyst] ⊟ Similar keyword already covered: "${keyword}", skipping`);
-        continue;
-      }
     }
 
     // Determine window status
@@ -259,8 +349,9 @@ export async function runAnalyst(): Promise<{ evaluated: number; opportunities: 
     const windowClosesAt = new Date(Date.now() + windowDays * 24 * 60 * 60 * 1000).toISOString();
 
     // Insert opportunity
+    const signalIds = signal._merged_ids || [signal.id];
     const { error } = await supabaseAdmin.from('opportunities').insert({
-      signal_ids: [signal.id],
+      signal_ids: signalIds,
       title: assessment.title,
       slug,
       description: assessment.description,
@@ -291,13 +382,24 @@ export async function runAnalyst(): Promise<{ evaluated: number; opportunities: 
     if (!error) {
       opportunities++;
       const emoji = score >= 70 ? '🎯' : score >= 50 ? '📊' : '❌';
-      console.log(`[Analyst] ${emoji} ${assessment.title} — Score: ${score.toFixed(1)} (window: ${windowDays}d)`);
+      console.log(`[Analyst] ${emoji} ${assessment.title} — Score: ${score.toFixed(1)} (viability: ${bv}, window: ${windowDays}d)`);
       console.log(`[Analyst]   Keyword: "${assessment.target_keyword}" | Template: ${assessment.recommended_template}`);
+
+      // Add to existing set for intra-run dedup
+      existingTopicSets.push({ opp: { id: '', slug, title: assessment.title, target_keyword: assessment.target_keyword }, words: newWords });
     } else {
       console.error(`[Analyst] Insert error for ${slug}:`, error.message);
     }
 
     await new Promise(r => setTimeout(r, 1000));
+  }
+
+  // Mark all processed signals as evaluated
+  for (const signal of evalSignals) {
+    const ids = signal._merged_ids || [signal.id];
+    for (const id of ids) {
+      await supabaseAdmin.from('signals').update({ status: 'evaluated' }).eq('id', id);
+    }
   }
 
   console.log(`[Analyst] === Analyst Run Complete ===`);

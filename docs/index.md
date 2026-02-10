@@ -1,27 +1,15 @@
 ---
 layout: default
-title: Product Factory - Daily Reports
+title: Product Factory — 每日洞察
 ---
 
-# Product Factory - Daily Reports
+<div class="report-header">
+  <h1>Product Factory</h1>
+  <div class="date">AI 驱动的产品发现日报</div>
+</div>
 
-AI-powered product discovery and opportunity evaluation reports.
-
-## Recent Reports
+## 历史报告
 
 <!-- REPORT_INDEX_START -->
-- [2026-02-10](reports/2026-02-10) — 103 signals, 4 opportunities, 10 derivatives, $1.4902
+- [2026-02-10](reports/2026-02-10) — 103 条信号, 4 个机会, 0 个已验证, $1.49
 <!-- REPORT_INDEX_END -->
-
----
-
-## Pipeline Overview
-
-| Stage | Description |
-|-------|-------------|
-| Signal Collection | Scrape 7 data sources for trending topics |
-| Hot Topic Filtering | AI scores opportunities on 6 dimensions |
-| Demand Derivation | AI generates derivative product ideas |
-| Competitive Check | SERP analysis to evaluate competition |
-| Keyword Validation | Google Autocomplete demand verification |
-| Daily Report | Summary of findings and opportunities |

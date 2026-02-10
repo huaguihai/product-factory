@@ -10,6 +10,42 @@ import { today } from '../utils/helpers';
 import * as fs from 'fs';
 import * as path from 'path';
 
+/**
+ * Dedup opportunities for display — keep only best per topic cluster
+ */
+function dedupOpportunities(opps: any[]): any[] {
+  if (!opps || opps.length === 0) return [];
+
+  const extractWords = (text: string): Set<string> => {
+    const stops = new Set(['the', 'a', 'an', 'to', 'of', 'in', 'for', 'on', 'how', 'and', 'or',
+      'step', 'by', 'guide', 'tutorial', 'complete', 'full', 'new', 'best', 'top', '2024', '2025', '2026']);
+    return new Set(
+      text.toLowerCase().replace(/[^a-z0-9\s\u4e00-\u9fff]/g, ' ')
+        .split(/\s+/).filter(w => w.length > 2 && !stops.has(w))
+    );
+  };
+
+  const jaccard = (a: Set<string>, b: Set<string>): number => {
+    if (a.size === 0 || b.size === 0) return 0;
+    let inter = 0;
+    for (const w of a) { if (b.has(w)) inter++; }
+    return inter / new Set([...a, ...b]).size;
+  };
+
+  // Keep best per topic (Jaccard >= 0.3 considered same topic)
+  const kept: any[] = [];
+  const keptWords: Set<string>[] = [];
+  for (const opp of opps) {
+    const words = extractWords(opp.title + ' ' + (opp.target_keyword || ''));
+    const isDup = keptWords.some(kw => jaccard(words, kw) >= 0.3);
+    if (!isDup) {
+      kept.push(opp);
+      keptWords.push(words);
+    }
+  }
+  return kept.slice(0, 5);
+}
+
 interface DailyReportData {
   date: string;
   signals: { total: number; bySource: Record<string, number> };
@@ -39,13 +75,35 @@ async function gatherReportData(): Promise<DailyReportData> {
   }
 
   // Today's opportunities with full details
-  const { data: opportunities } = await supabaseAdmin
+  // Try selecting title_zh; if column doesn't exist, fallback without it
+  let opportunities: any[] | null = null;
+  const baseFields = 'title, slug, score, score_breakdown, target_keyword, recommended_template, recommended_features, recommended_features_zh, window_status, window_closes_at, competitors, description, description_zh, category, signal_ids, estimated_effort, monetization_strategy, status';
+
+  const { data: oppsWithZh, error: zhError } = await supabaseAdmin
     .from('opportunities')
-    .select('title, slug, score, score_breakdown, target_keyword, recommended_template, recommended_features, recommended_features_zh, window_status, window_closes_at, competitors, description, description_zh, category, signal_ids, estimated_effort, monetization_strategy, status')
+    .select(baseFields + ', title_zh')
     .gte('created_at', startOfDay)
     .lte('created_at', endOfDay)
+    .neq('status', 'archived')
+    .neq('status', 'rejected')
     .order('score', { ascending: false })
-    .limit(5);
+    .limit(10);
+
+  if (zhError && zhError.message?.includes('title_zh')) {
+    // Column doesn't exist yet, query without it
+    const { data: oppsNoZh } = await supabaseAdmin
+      .from('opportunities')
+      .select(baseFields)
+      .gte('created_at', startOfDay)
+      .lte('created_at', endOfDay)
+      .neq('status', 'archived')
+      .neq('status', 'rejected')
+      .order('score', { ascending: false })
+      .limit(10);
+    opportunities = oppsNoZh;
+  } else {
+    opportunities = oppsWithZh;
+  }
 
   // Fetch related signals for source URLs
   if (opportunities && opportunities.length > 0) {
@@ -78,10 +136,13 @@ async function gatherReportData(): Promise<DailyReportData> {
   const validated = (derivatives || []).filter((d: any) => d.status === 'validated').length;
   const rejected = (derivatives || []).filter((d: any) => d.status === 'rejected').length;
 
+  // Dedup opportunities at display level (defense against near-duplicates)
+  const dedupedOpps = dedupOpportunities(opportunities || []);
+
   return {
     date: dateStr,
     signals: { total: signals?.length || 0, bySource },
-    opportunities: { total: opportunities?.length || 0, topScoring: opportunities || [] },
+    opportunities: { total: dedupedOpps.length, topScoring: dedupedOpps },
     derivatives: { total: derivatives?.length || 0, validated, rejected, topScoring: derivatives || [] },
     cost,
   };
@@ -95,6 +156,21 @@ const SOURCE_MAP: Record<string, string> = {
   hackernews: 'Hacker News',
   product_hunt: 'Product Hunt',
   reddit: 'Reddit',
+  youtube_suggestions: 'YouTube 热搜',
+  google_paa: 'Google 相关问题',
+  zhihu: '知乎',
+  chrome_webstore: 'Chrome 扩展商店',
+  indiehackers: 'IndieHackers',
+  gumroad: 'Gumroad',
+  exploding_topics: '爆发趋势',
+  techmeme: 'Techmeme',
+  bestblogs: '优质博客',
+  quora: 'Quora',
+  '36kr': '36氪',
+  weibo: '微博',
+  bilibili: 'B站',
+  juejin: '掘金',
+  xiaohongshu: '小红书',
 };
 
 const TEMPLATE_MAP: Record<string, string> = {
@@ -175,7 +251,8 @@ function generateExecutiveSummary(data: DailyReportData): { verdict: string; rea
   if (bestOpp && bestOpp.score >= 70) {
     const effort = EFFORT_MAP[bestOpp.estimated_effort] || bestOpp.estimated_effort;
     const bv = bestOpp.score_breakdown?.business_viability;
-    verdict = `今日最佳机会：${bestOpp.description_zh?.split('，')[0] || bestOpp.title}`;
+    const summaryTitle = bestOpp.title_zh || bestOpp.description_zh?.split('，')[0] || bestOpp.title;
+    verdict = `今日最佳机会：${summaryTitle}`;
     reasoning = `综合评分 ${bestOpp.score.toFixed(0)} 分` +
       (bv ? `，商业可行性 ${bv} 分` : '') +
       `，预估投入 ${effort}` +
@@ -268,7 +345,6 @@ function formatFullHtml(data: DailyReportData): string {
     for (const opp of data.opportunities.topScoring) {
       const score = typeof opp.score === 'number' ? opp.score : 0;
       const bd = opp.score_breakdown || {};
-      const desc = opp.description_zh || opp.description || '';
       const template = TEMPLATE_MAP[opp.recommended_template] || opp.recommended_template || '';
       const effort = EFFORT_MAP[opp.estimated_effort] || opp.estimated_effort || '';
       const windowDays = opp.window_closes_at
@@ -277,9 +353,10 @@ function formatFullHtml(data: DailyReportData): string {
 
       lines.push('<div class="opp-card">');
 
-      // Header with title and score
+      // Header with Chinese title and score
+      const displayTitle = opp.title_zh || opp.description_zh?.split('，')[0] || opp.title;
       lines.push('  <div class="card-header">');
-      lines.push(`    <h3 class="card-title">${opp.title}</h3>`);
+      lines.push(`    <h3 class="card-title">${displayTitle}</h3>`);
       lines.push(`    <span class="card-score ${scoreClass(score)}">${score.toFixed(0)}</span>`);
       lines.push('  </div>');
 
@@ -287,29 +364,6 @@ function formatFullHtml(data: DailyReportData): string {
 
       // Score bar
       const dims = ['development_speed', 'monetization', 'seo_potential', 'business_viability', 'time_sensitivity', 'longtail_value', 'novelty'];
-      lines.push('    <div class="score-bar-row">');
-      for (const dim of dims) {
-        const val = bd[dim] || 0;
-        lines.push(`      <div class="score-segment ${scoreSegment(val)}" title="${dim}: ${val}"></div>`);
-      }
-      lines.push('    </div>');
-
-      // Description
-      lines.push(`    <p class="card-desc">${desc}</p>`);
-
-      // Tags
-      lines.push('    <div class="tags">');
-      lines.push(`      <span class="tag tag-keyword">${opp.target_keyword}</span>`);
-      if (template) lines.push(`      <span class="tag tag-form">${template}</span>`);
-      if (effort) lines.push(`      <span class="tag tag-effort">投入 ${effort}</span>`);
-      if (windowDays > 0) lines.push(`      <span class="tag tag-window">窗口 ${windowDays} 天</span>`);
-      const strategies = (opp.monetization_strategy || []).slice(0, 2);
-      for (const s of strategies) {
-        lines.push(`      <span class="tag tag-monetization">${s}</span>`);
-      }
-      lines.push('    </div>');
-
-      // Meta: key scores
       const dimLabels: Record<string, string> = {
         development_speed: '开发速度',
         monetization: '变现',
@@ -319,6 +373,33 @@ function formatFullHtml(data: DailyReportData): string {
         longtail_value: '长尾价值',
         novelty: '新颖度',
       };
+      lines.push('    <div class="score-bar-row">');
+      for (const dim of dims) {
+        const val = bd[dim] || 0;
+        lines.push(`      <div class="score-segment ${scoreSegment(val)}" title="${dimLabels[dim]}: ${val}"></div>`);
+      }
+      lines.push('    </div>');
+
+      // Description (Chinese preferred)
+      const displayDesc = opp.description_zh || opp.description || '';
+      lines.push(`    <p class="card-desc">${displayDesc}</p>`);
+
+      // Tags
+      lines.push('    <div class="tags">');
+      lines.push(`      <span class="tag tag-keyword">${opp.target_keyword}</span>`);
+      if (template) lines.push(`      <span class="tag tag-form">${template}</span>`);
+      if (effort) lines.push(`      <span class="tag tag-effort">投入 ${effort}</span>`);
+      if (windowDays > 0) lines.push(`      <span class="tag tag-window">窗口 ${windowDays} 天</span>`);
+      const strategies = (opp.monetization_strategy || []).slice(0, 2);
+      const strategyMap: Record<string, string> = { adsense: '广告', affiliate: '联盟', referral: '推荐', sponsored: '赞助' };
+      for (const s of strategies) {
+        // Extract just the core strategy type, strip long parenthetical details
+        const core = s.split('(')[0].trim().split(' ')[0].toLowerCase();
+        lines.push(`      <span class="tag tag-monetization">${strategyMap[core] || strategyMap[s] || s.split('(')[0].trim()}</span>`);
+      }
+      lines.push('    </div>');
+
+      // Meta: key scores
       const metaParts = dims.map(d => `<span><strong>${dimLabels[d]}</strong> ${bd[d] || 0}</span>`).join(' ');
       lines.push(`    <div class="card-meta">${metaParts}</div>`);
 
@@ -465,7 +546,8 @@ async function sendToDiscord(data: DailyReportData): Promise<boolean> {
       for (let i = 0; i < Math.min(2, goodOpps.length); i++) {
         const opp = goodOpps[i];
         const effort = EFFORT_MAP[opp.estimated_effort] || opp.estimated_effort;
-        lines.push(`${i + 1}. **${opp.title}** (${opp.score.toFixed(0)}分) — \`${opp.target_keyword}\` · ${effort}`);
+        const discordTitle = opp.title_zh || opp.description_zh?.split('，')[0] || opp.title;
+        lines.push(`${i + 1}. **${discordTitle}** (${opp.score.toFixed(0)}分) — \`${opp.target_keyword}\` · ${effort}`);
       }
     }
 

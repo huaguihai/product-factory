@@ -10,6 +10,7 @@ import { slugify } from '../../utils/helpers';
 
 interface OpportunityAssessment {
   title: string;
+  title_zh: string;
   slug: string;
   description: string;
   description_zh: string;
@@ -190,12 +191,13 @@ Signal:
 
 Respond with JSON:
 {
-  "title": "SEO-friendly opportunity title (English)",
+  "title": "SEO-friendly opportunity title (English, for slug and SEO)",
+  "title_zh": "中文标题（10-25字，具体描述产品内容，如：AI视频生成工具对比与教程站、Step青少年理财App注册指南）",
   "slug": "url-safe-slug",
-  "description": "2-3 sentence description of the opportunity (English)",
-  "description_zh": "2-3句中文描述：这个项目是什么、为什么现在是机会、我们可以做什么",
-  "target_keyword": "primary SEO keyword (e.g. 'seedance tutorial', 'seedance vs kling')",
-  "secondary_keywords": ["related keyword 1", "related keyword 2", "related keyword 3"],
+  "description": "2-3 sentence description (English)",
+  "description_zh": "2-3句中文描述，不要用「一个」开头，直接说明：做什么产品、解决什么问题、怎么赚钱",
+  "target_keyword": "primary SEO keyword in English (e.g. 'seedance tutorial')",
+  "secondary_keywords": ["keyword 1", "keyword 2", "keyword 3"],
   "category": "ai_tool|dev_tool|saas|framework|tutorial|utility|trending_topic",
   "opportunity_type": "direct or derivative",
   "product_form": "website|mini_program|both",
@@ -350,7 +352,7 @@ export async function runAnalyst(): Promise<{ evaluated: number; opportunities: 
 
     // Insert opportunity
     const signalIds = signal._merged_ids || [signal.id];
-    const { error } = await supabaseAdmin.from('opportunities').insert({
+    const insertData: Record<string, any> = {
       signal_ids: signalIds,
       title: assessment.title,
       slug,
@@ -377,7 +379,21 @@ export async function runAnalyst(): Promise<{ evaluated: number; opportunities: 
       status: score >= 50 ? 'evaluated' : 'rejected',
       decision_reason: score < 50 ? `Score too low: ${score.toFixed(1)}` : null,
       decided_by: score < 50 ? 'auto' : 'human',
-    });
+    };
+
+    // Try with title_zh first; if column doesn't exist, retry without it
+    if (assessment.title_zh) {
+      insertData.title_zh = assessment.title_zh;
+    }
+
+    let { error } = await supabaseAdmin.from('opportunities').insert(insertData);
+
+    // If title_zh column doesn't exist yet, retry without it
+    if (error && error.message?.includes('title_zh')) {
+      delete insertData.title_zh;
+      const retry = await supabaseAdmin.from('opportunities').insert(insertData);
+      error = retry.error;
+    }
 
     if (!error) {
       opportunities++;

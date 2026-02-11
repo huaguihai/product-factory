@@ -171,6 +171,8 @@ const SOURCE_MAP: Record<string, string> = {
   bilibili: 'B站',
   juejin: '掘金',
   xiaohongshu: '小红书',
+  douyin: '抖音热搜',
+  v2ex: 'V2EX',
 };
 
 const TEMPLATE_MAP: Record<string, string> = {

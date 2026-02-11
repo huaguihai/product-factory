@@ -28,8 +28,10 @@ import { scrapeWeibo } from './sources/weibo';
 import { scrapeBilibili } from './sources/bilibili';
 import { scrapeJuejin } from './sources/juejin';
 import { scrapeXiaohongshu } from './sources/xiaohongshu';
+import { scrapeDouyin } from './sources/douyin';
+import { scrapeV2ex } from './sources/v2ex';
 
-type SourceName = 'github_trending' | 'hackernews' | 'producthunt' | 'reddit' | 'google_trends' | 'tech_media' | 'twitter_trends' | 'youtube_suggestions' | 'google_paa' | 'zhihu' | 'chrome_webstore' | 'indiehackers' | 'gumroad' | 'exploding_topics' | 'techmeme' | 'bestblogs' | 'quora' | '36kr' | 'weibo' | 'bilibili' | 'juejin' | 'xiaohongshu';
+type SourceName = 'github_trending' | 'hackernews' | 'producthunt' | 'reddit' | 'google_trends' | 'tech_media' | 'twitter_trends' | 'youtube_suggestions' | 'google_paa' | 'zhihu' | 'chrome_webstore' | 'indiehackers' | 'gumroad' | 'exploding_topics' | 'techmeme' | 'bestblogs' | 'quora' | '36kr' | 'weibo' | 'bilibili' | 'juejin' | 'xiaohongshu' | 'douyin' | 'v2ex';
 
 const SOURCE_SCRAPERS: Record<SourceName, () => Promise<{ scraped: number; saved: number }>> = {
   github_trending: scrapeGitHubTrending,
@@ -54,12 +56,14 @@ const SOURCE_SCRAPERS: Record<SourceName, () => Promise<{ scraped: number; saved
   bilibili: scrapeBilibili,
   juejin: scrapeJuejin,
   xiaohongshu: scrapeXiaohongshu,
+  douyin: scrapeDouyin,
+  v2ex: scrapeV2ex,
 };
 
 // Rotation sources
 let devSourceIndex = 0;
 const DEV_SOURCES: SourceName[] = ['github_trending', 'hackernews', 'producthunt', 'reddit', 'chrome_webstore', 'indiehackers', 'gumroad', 'quora', 'xiaohongshu'];
-const ALWAYS_SOURCES: SourceName[] = ['google_trends', 'tech_media', 'twitter_trends', 'youtube_suggestions', 'google_paa', 'zhihu', 'exploding_topics', 'techmeme', 'bestblogs', '36kr', 'weibo', 'bilibili', 'juejin'];
+const ALWAYS_SOURCES: SourceName[] = ['google_trends', 'tech_media', 'twitter_trends', 'youtube_suggestions', 'google_paa', 'zhihu', 'exploding_topics', 'techmeme', 'bestblogs', '36kr', 'weibo', 'bilibili', 'juejin', 'douyin', 'v2ex'];
 
 interface PreFilterResult {
   is_emerging: boolean;

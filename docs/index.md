@@ -11,5 +11,6 @@ title: Product Factory — 每日洞察
 ## 历史报告
 
 <!-- REPORT_INDEX_START -->
+- [2026-02-11](reports/2026-02-11) — 253 条信号, 5 个机会, 0 个已验证, $3.10
 - [2026-02-10](reports/2026-02-10) — 285 条信号, 4 个机会, 0 个已验证, $2.74
 <!-- REPORT_INDEX_END -->

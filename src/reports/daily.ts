@@ -9,6 +9,7 @@ import { config } from '../config';
 import { today } from '../utils/helpers';
 import * as fs from 'fs';
 import * as path from 'path';
+import { execSync } from 'child_process';
 
 /**
  * Dedup opportunities for display — keep only best per topic cluster
@@ -603,6 +604,31 @@ async function saveReportToDb(data: DailyReportData): Promise<void> {
 }
 
 /**
+ * Commit and push report files to GitHub so GitHub Pages deploys automatically
+ */
+function gitPushReport(date: string): void {
+  const repoRoot = path.resolve(__dirname, '../..');
+  const run = (cmd: string) => execSync(cmd, { cwd: repoRoot, stdio: 'pipe', timeout: 30_000 }).toString().trim();
+
+  try {
+    run(`git add docs/reports/${date}.md docs/index.md`);
+
+    // Check if there are staged changes to commit
+    const diff = run('git diff --cached --name-only');
+    if (!diff) {
+      console.log('[Report] 无文件变更，跳过 git push');
+      return;
+    }
+
+    run(`git commit -m "chore: publish daily report ${date}"`);
+    run('git push');
+    console.log(`[Report] 已推送至 GitHub: ${date}`);
+  } catch (error) {
+    console.error('[Report] git push 失败:', error);
+  }
+}
+
+/**
  * Generate and send daily report
  */
 export async function generateDailyReport(): Promise<void> {
@@ -614,6 +640,9 @@ export async function generateDailyReport(): Promise<void> {
   const html = formatFullHtml(data);
   saveReport(data, html);
   updateReportIndex(data);
+
+  // Commit and push to GitHub so Pages deploys
+  gitPushReport(data.date);
 
   // Log summary
   const summary = generateExecutiveSummary(data);
